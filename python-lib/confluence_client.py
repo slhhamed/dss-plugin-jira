@@ -24,7 +24,7 @@ class ConfluenceClient(object):
         else:
             return normalize_url(self.api_url)
 
-    def create_page(self, title, content, space_key="Testagent"):
+    def create_page(self, title, content, space_key):
         url = f"{self.site_url}rest/api/content"
         data = {
             "type": "page",

@@ -22,6 +22,12 @@
             "type": "PRESET",
             "parameterSetId": "basic-auth",
             "visibilityCondition": "model.access_type == 'token_access'"
+        },
+        {
+            "type": "STRING",
+            "name": "spaceKey",
+            "label": "Space key",
+            "mandatory": true
         }
     ]
 }

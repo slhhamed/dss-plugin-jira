@@ -11,10 +11,11 @@ class ConfluenceCreatePageTool(BaseAgentTool):
         self.config = config
         connection_details = get_connection_details(config)
         self.client = ConfluenceClient(connection_details)
+        self.space_key = config.get("spaceKey")
 
     def get_descriptor(self, tool):
         return {
-            "description": "This tool creates a Confluence page in space 'Testagent'. The input must contain the page title and content.",
+            "description": "This tool creates a Confluence page in the configured space. The input must contain the page title and content.",
             "inputSchema": {
                 "$id": "https://dataiku.com/agents/tools/search/input",
                 "title": "Create Confluence page tool",
@@ -33,9 +34,9 @@ class ConfluenceCreatePageTool(BaseAgentTool):
             },
         }
 
-    def create_confluence_page(self, title: str, content: str):
+    def create_confluence_page(self, space_key: str, title: str, content: str):
         try:
-            new_page = self.client.create_page(title, content)
+            new_page = self.client.create_page(title, content, space_key)
             return new_page
         except Exception as exception:
             return f"Error creating page: {str(exception)}"
@@ -44,6 +45,7 @@ class ConfluenceCreatePageTool(BaseAgentTool):
         args = input.get("input", {})
         title = args.get("title")
         content = args.get("content")
+        space_key = self.space_key
         confluence_instance_url = self.client.site_url
 
         trace.span["name"] = "CONFLUENCE_CREATE_PAGE_TOOL_CALL"
@@ -51,10 +53,11 @@ class ConfluenceCreatePageTool(BaseAgentTool):
             trace.inputs[key] = value
         trace.attributes["config"] = {
             "confluence_instance_url": confluence_instance_url,
-            "space_key": "Testagent",
+            "space_key": space_key,
         }
 
-        created_page = self.create_confluence_page(title, content)
+        created_page = self.create_confluence_page(space_key, title, content)
+
 
         if isinstance(created_page, dict) and created_page.get("id"):
             output_text = (
