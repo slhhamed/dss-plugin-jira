@@ -58,7 +58,6 @@ class ConfluenceCreatePageTool(BaseAgentTool):
 
         created_page = self.create_confluence_page(space_key, title, content)
 
-
         if isinstance(created_page, dict) and created_page.get("id"):
             output_text = (
                 f"Page created: {created_page.get('id')} available at {confluence_instance_url}pages/{created_page.get('id')}"

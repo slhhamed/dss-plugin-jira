@@ -43,3 +43,16 @@ class ConfluenceClient(object):
             verify=not self.ignore_ssl_check,
         )
         return response.json()
+
+    def search_pages(self, query, limit=3):
+        url = f"{self.site_url}rest/api/search"
+        params = {"cql": f'text~"{query}"', "limit": limit}
+        headers = {"Accept": "application/json"}
+        response = requests.get(
+            url,
+            params=params,
+            auth=(self.username, self.password),
+            headers=headers,
+            verify=not self.ignore_ssl_check,
+        )
+        return response.json()
