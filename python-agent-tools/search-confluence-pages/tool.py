@@ -1,4 +1,5 @@
 from dataiku.llm.agent_tools import BaseAgentTool
+import json
 import logging
 from utils import get_connection_details
 from confluence_client import ConfluenceClient
@@ -14,7 +15,7 @@ class ConfluenceSearchPagesTool(BaseAgentTool):
 
     def get_descriptor(self, tool):
         return {
-            "description": "This tool searches Confluence pages using the provided keywords and returns the first three results.",
+            "description": "This tool searches Confluence pages using the provided keywords and returns up to three results with their URLs, titles, and page content.",
             "inputSchema": {
                 "$id": "https://dataiku.com/agents/tools/search/input",
                 "title": "Search Confluence pages tool",
@@ -57,13 +58,29 @@ class ConfluenceSearchPagesTool(BaseAgentTool):
                 page_id = content.get("id")
                 if page_id:
                     link = f"{confluence_instance_url}pages/{page_id}"
-                    items.append(f"{title}: {link}")
-            output_text = "\n".join(items) if items else "No pages found."
+                    page_data = self.client.get_page_content(page_id)
+                    page_content = (
+                        page_data.get("body", {})
+                        .get("storage", {})
+                        .get("value", "")
+                        if isinstance(page_data, dict)
+                        else ""
+                    )
+                    items.append(
+                        {
+                            "url": link,
+                            "title": title,
+                            "page_content": page_content,
+                        }
+                    )
+            output_data = items if items else []
         elif isinstance(search_result, dict) and search_result.get("message"):
-            output_text = f"There was a problem while searching pages: {search_result.get('message')}"
+            output_data = {
+                "error": f"There was a problem while searching pages: {search_result.get('message')}"
+            }
         else:
-            output_text = str(search_result)
+            output_data = {"error": str(search_result)}
 
-        trace.outputs["output"] = output_text
+        trace.outputs["results"] = output_data
 
-        return {"output": output_text}
+        return {"output": json.dumps(output_data), "results": output_data}

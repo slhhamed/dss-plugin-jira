@@ -56,3 +56,16 @@ class ConfluenceClient(object):
             verify=not self.ignore_ssl_check,
         )
         return response.json()
+
+    def get_page_content(self, page_id):
+        url = f"{self.site_url}rest/api/content/{page_id}"
+        params = {"expand": "body.storage"}
+        headers = {"Accept": "application/json"}
+        response = requests.get(
+            url,
+            params=params,
+            auth=(self.username, self.password),
+            headers=headers,
+            verify=not self.ignore_ssl_check,
+        )
+        return response.json()
