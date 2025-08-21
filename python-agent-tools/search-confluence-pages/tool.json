@@ -1,0 +1,27 @@
+{
+    "id": "search-confluence-pages",
+    "meta": {
+        "icon": "icon-search",
+        "label": "Search Confluence Pages",
+        "description": "Search Confluence pages by keywords and return the first three results"
+    },
+    "params": [
+        {
+            "name": "access_type",
+            "label": "Access type. Reviewer: hidden menu to keep for future extension",
+            "visibilityCondition": "false",
+            "type": "SELECT",
+            "defaultValue": "token_access",
+            "selectChoices": [
+                {"value": "token_access", "label": "Token"}
+            ]
+        },
+        {
+            "name": "token_access",
+            "label": "Confluence connection",
+            "type": "PRESET",
+            "parameterSetId": "basic-auth",
+            "visibilityCondition": "model.access_type == 'token_access'"
+        }
+    ]
+}
