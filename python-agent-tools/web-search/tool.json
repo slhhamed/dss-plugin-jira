@@ -1,0 +1,9 @@
+{
+    "id": "web-search",
+    "meta": {
+        "icon": "icon-search",
+        "label": "Web Search",
+        "description": "Perform a web search and return the first three results"
+    },
+    "params": []
+}

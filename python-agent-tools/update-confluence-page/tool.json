@@ -1,0 +1,27 @@
+{
+    "id": "update-confluence-page",
+    "meta": {
+        "icon": "icon-edit",
+        "label": "Update Confluence Page",
+        "description": "Update an existing Confluence page"
+    },
+    "params": [
+        {
+            "name": "access_type",
+            "label": "Access type. Reviewer: hidden menu to keep for future extension",
+            "visibilityCondition": "false",
+            "type": "SELECT",
+            "defaultValue": "token_access",
+            "selectChoices": [
+                {"value": "token_access", "label": "Token"}
+            ]
+        },
+        {
+            "name": "token_access",
+            "label": "Confluence connection",
+            "type": "PRESET",
+            "parameterSetId": "basic-auth",
+            "visibilityCondition": "model.access_type == 'token_access'"
+        }
+    ]
+}

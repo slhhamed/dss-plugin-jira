@@ -69,3 +69,35 @@ class ConfluenceClient(object):
             verify=not self.ignore_ssl_check,
         )
         return response.json()
+
+    def update_page(self, page_id, title, content):
+        url = f"{self.site_url}rest/api/content/{page_id}"
+        headers = {"Content-Type": "application/json", "Accept": "application/json"}
+
+        current_page = requests.get(
+            url,
+            auth=(self.username, self.password),
+            headers=headers,
+            verify=not self.ignore_ssl_check,
+        ).json()
+
+        version_number = current_page.get("version", {}).get("number", 1) + 1
+
+        data = {
+            "id": page_id,
+            "type": "page",
+            "title": title,
+            "version": {"number": version_number},
+            "body": {
+                "storage": {"value": content, "representation": "storage"},
+            },
+        }
+
+        response = requests.put(
+            url,
+            json=data,
+            auth=(self.username, self.password),
+            headers=headers,
+            verify=not self.ignore_ssl_check,
+        )
+        return response.json()
