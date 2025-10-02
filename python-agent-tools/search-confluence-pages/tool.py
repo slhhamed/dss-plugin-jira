@@ -1,6 +1,7 @@
 from dataiku.llm.agent_tools import BaseAgentTool
 import json
 import logging
+from urllib.parse import urljoin
 from utils import get_connection_details
 from confluence_client import ConfluenceClient
 
@@ -39,7 +40,12 @@ class ConfluenceSearchPagesTool(BaseAgentTool):
     def invoke(self, input, trace):
         args = input.get("input", {})
         query = args.get("query")
-        confluence_instance_url = self.client.site_url
+        confluence_instance_url = self.client.site_url or ""
+        base_url = (
+            f"{confluence_instance_url.rstrip('/')}/"
+            if confluence_instance_url
+            else ""
+        )
 
         trace.span["name"] = "CONFLUENCE_SEARCH_PAGES_TOOL_CALL"
         for key, value in args.items():
@@ -56,8 +62,45 @@ class ConfluenceSearchPagesTool(BaseAgentTool):
                 content = item.get("content", {})
                 title = content.get("title", "Untitled")
                 page_id = content.get("id")
+
+                link_path = None
+                content_links = content.get("_links") if isinstance(content, dict) else None
+                if isinstance(content_links, dict):
+                    link_path = (
+                        content_links.get("webui")
+                        or content_links.get("tinyui")
+                        or content_links.get("self")
+                    )
+
+                if not link_path:
+                    item_links = item.get("_links") if isinstance(item, dict) else None
+                    if isinstance(item_links, dict):
+                        link_path = item_links.get("webui") or item_links.get("self")
+
+                if not link_path and isinstance(content, dict):
+                    link_path = content.get("url")
+
+                if not link_path and isinstance(item, dict):
+                    link_path = item.get("url")
+
+                if link_path:
+                    if base_url:
+                        normalized_path = (
+                            link_path.lstrip("/")
+                            if isinstance(link_path, str) and link_path.startswith("/")
+                            else link_path
+                        )
+                        link = urljoin(base_url, normalized_path)
+                    else:
+                        link = link_path
+                elif page_id and base_url:
+                    link = urljoin(base_url, f"pages/{page_id}")
+                elif page_id:
+                    link = f"pages/{page_id}"
+                else:
+                    link = base_url.rstrip("/") or None
+
                 if page_id:
-                    link = f"{confluence_instance_url}pages/{page_id}"
                     page_data = self.client.get_page_content(page_id)
                     page_content = (
                         page_data.get("body", {})
@@ -66,6 +109,10 @@ class ConfluenceSearchPagesTool(BaseAgentTool):
                         if isinstance(page_data, dict)
                         else ""
                     )
+                else:
+                    page_content = ""
+
+                if link:
                     items.append(
                         {
                             "url": link,
