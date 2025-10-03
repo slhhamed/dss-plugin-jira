@@ -25,21 +25,26 @@ class ConfluenceSearchPagesTool(BaseAgentTool):
                     "query": {
                         "type": "string",
                         "description": "Keywords to search for in Confluence pages",
-                    }
+                    },
+                    "space_key": {
+                        "type": "string",
+                        "description": "Optional Confluence space key to restrict the search. Leave empty to search all spaces.",
+                    },
                 },
                 "required": ["query"],
             },
         }
 
-    def search_pages(self, query: str):
+    def search_pages(self, query: str, space_key: str = None):
         try:
-            return self.client.search_pages(query, limit=3)
+            return self.client.search_pages(query, limit=3, space_key=space_key)
         except Exception as exception:
             return f"Error searching pages: {str(exception)}"
 
     def invoke(self, input, trace):
         args = input.get("input", {})
         query = args.get("query")
+        space_key = args.get("space_key") or None
         confluence_instance_url = self.client.site_url or ""
         base_url = (
             f"{confluence_instance_url.rstrip('/')}/"
@@ -54,7 +59,7 @@ class ConfluenceSearchPagesTool(BaseAgentTool):
             "confluence_instance_url": confluence_instance_url,
         }
 
-        search_result = self.search_pages(query)
+        search_result = self.search_pages(query, space_key)
 
         if isinstance(search_result, dict) and search_result.get("results"):
             items = []

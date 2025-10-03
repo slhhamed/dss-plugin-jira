@@ -44,9 +44,14 @@ class ConfluenceClient(object):
         )
         return response.json()
 
-    def search_pages(self, query, limit=3):
+    def search_pages(self, query, limit=3, space_key=None):
         url = f"{self.site_url}rest/api/search"
-        params = {"cql": f'text~"{query}"', "limit": limit}
+        cql_parts = [f'text~"{query}"']
+        if space_key:
+            cql_parts.append(f'space="{space_key}"')
+        cql_query = " AND ".join(cql_parts)
+        cql_query = f"{cql_query} ORDER BY lastmodified DESC"
+        params = {"cql": cql_query, "limit": limit}
         headers = {"Accept": "application/json"}
         response = requests.get(
             url,
