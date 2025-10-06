@@ -21,6 +21,11 @@ class ConfluenceClient(object):
         self.password = connection_details.get("token", "")
         self.ignore_ssl_check = connection_details.get("ignore_ssl_check", False)
         self.site_url = self.get_site_url()
+        # Track whether the v2 search endpoint is available to avoid retrying
+        # known-missing URLs on every invocation. The value remains ``None``
+        # until we successfully call v2 (True) or receive a definitive 404/405
+        # (False).
+        self._search_v2_supported: Optional[bool] = None
 
     def get_site_url(self):
         if self.server_type == "cloud":

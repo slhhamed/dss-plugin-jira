@@ -37,7 +37,6 @@ if "requests" not in sys.modules:
 
     requests_module.get = _request_stub
     requests_module.post = _request_stub
-
     sys.modules["requests"] = requests_module
 
 if "numpy" not in sys.modules:

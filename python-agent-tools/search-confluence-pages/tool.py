@@ -91,7 +91,8 @@ class ConfluenceSearchPagesTool(BaseAgentTool):
                 "space_key": space_key,
             }
 
-        if isinstance(search_result, dict) and search_result.get("results"):
+
+        if isinstance(search_result, dict) and raw_results:
             items = []
             for item in search_result.get("results", [])[:limit_value]:
                 title = item.get("title") or "Untitled"
@@ -151,10 +152,18 @@ class ConfluenceSearchPagesTool(BaseAgentTool):
                 if link:
                     items.append(item_output)
             output_data = items if items else []
-        elif isinstance(search_result, dict) and search_result.get("message"):
-            output_data = {
-                "error": f"There was a problem while searching pages: {search_result.get('message')}"
-            }
+            output_text = json.dumps(output_data)
+            trace.outputs["results"] = output_data
+            return {"output": output_text, "results": output_data}
+
+        if isinstance(search_result, dict):
+            message = search_result.get("message")
+            attempts = search_result.get("attempts", [])
+            trace.attributes.setdefault("search", {})["attempts"] = attempts
+            output_message = message or "No Confluence pages matched your query."
+            trace.outputs["message"] = output_message
+            trace.outputs["results"] = []
+            return {"output": output_message, "results": []}
         else:
             message = None
             if isinstance(search_result, dict):
