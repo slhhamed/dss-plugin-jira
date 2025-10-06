@@ -222,6 +222,7 @@ def test_confluence_client_reports_error(monkeypatch):
     assert result["source"] == "v2"
     assert result["error"]["message"] == "internal error"
     assert result["error"]["status_code"] == 500
+    assert result["message"] == "internal error"
 
 
 def test_tool_invoke_formats_results_and_trace(monkeypatch):

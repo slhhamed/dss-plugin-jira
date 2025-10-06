@@ -1,4 +1,5 @@
 import logging
+from collections import OrderedDict
 from typing import Any, Dict, List, Optional
 from urllib.parse import urljoin
 
@@ -136,6 +137,7 @@ class ConfluenceClient(object):
                     },
                     "attempts": attempts,
                     "source": version,
+                    "message": attempt_record["error"],
                 }
 
             try:
@@ -172,6 +174,7 @@ class ConfluenceClient(object):
             },
             "attempts": attempts,
             "source": None,
+            "message": "No supported Confluence search endpoint responded successfully.",
         }
 
     def _sanitize_limit(self, limit: Optional[int]) -> int:
