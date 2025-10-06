@@ -16,7 +16,11 @@ class ConfluenceSearchPagesTool(BaseAgentTool):
 
     def get_descriptor(self, tool):
         return {
-            "description": "This tool searches Confluence pages using the provided keywords and returns up to three results with their URLs, titles, and page content.",
+            "description": (
+                "This tool searches Confluence pages using the provided keywords "
+                "and returns up to three results with their URLs, titles, and page "
+                "content."
+            ),
             "inputSchema": {
                 "$id": "https://dataiku.com/agents/tools/search/input",
                 "title": "Search Confluence pages tool",
@@ -30,21 +34,39 @@ class ConfluenceSearchPagesTool(BaseAgentTool):
                         "type": "string",
                         "description": "Optional Confluence space key to restrict the search. Leave empty to search all spaces.",
                     },
+                    "limit": {
+                        "type": "integer",
+                        "description": "Maximum number of results to return (default: 3).",
+                        "minimum": 1,
+                        "default": 3,
+                    },
                 },
                 "required": ["query"],
             },
         }
 
-    def search_pages(self, query: str, space_key: str = None):
+    def search_pages(self, query: str, space_key: str = None, limit: int = 3):
         try:
-            return self.client.search_pages(query, limit=3, space_key=space_key)
+            return self.client.search_pages(query, limit=limit, space_key=space_key)
         except Exception as exception:
-            return f"Error searching pages: {str(exception)}"
+            return {
+                "results": [],
+                "error": {
+                    "message": f"Error searching pages: {str(exception)}",
+                },
+            }
 
     def invoke(self, input, trace):
         args = input.get("input", {})
         query = args.get("query")
         space_key = args.get("space_key") or None
+        limit = args.get("limit", 3)
+        try:
+            limit_value = int(limit)
+        except (TypeError, ValueError):
+            limit_value = 3
+        if limit_value <= 0:
+            limit_value = 3
         confluence_instance_url = self.client.site_url or ""
         base_url = (
             f"{confluence_instance_url.rstrip('/')}/"
@@ -57,81 +79,89 @@ class ConfluenceSearchPagesTool(BaseAgentTool):
             trace.inputs[key] = value
         trace.attributes["config"] = {
             "confluence_instance_url": confluence_instance_url,
+            "limit": limit_value,
         }
 
-        search_result = self.search_pages(query, space_key)
+        search_result = self.search_pages(query, space_key, limit_value)
+
+        if isinstance(search_result, dict):
+            trace.attributes["search"] = {
+                "source": search_result.get("source"),
+                "attempts": search_result.get("attempts"),
+                "space_key": space_key,
+            }
 
         if isinstance(search_result, dict) and search_result.get("results"):
             items = []
-            for item in search_result.get("results", [])[:3]:
-                content = item.get("content", {})
-                title = content.get("title", "Untitled")
-                page_id = content.get("id")
+            for item in search_result.get("results", [])[:limit_value]:
+                title = item.get("title") or "Untitled"
+                page_id = item.get("id") or None
+                link = item.get("url")
 
-                link_path = None
-                content_links = content.get("_links") if isinstance(content, dict) else None
-                if isinstance(content_links, dict):
-                    link_path = (
-                        content_links.get("webui")
-                        or content_links.get("tinyui")
-                        or content_links.get("self")
-                    )
+                if not link:
+                    link_path = item.get("url_path")
+                    if link_path:
+                        if base_url:
+                            normalized_path = (
+                                link_path.lstrip("/")
+                                if isinstance(link_path, str) and link_path.startswith("/")
+                                else link_path
+                            )
+                            link = urljoin(base_url, normalized_path)
+                        else:
+                            link = link_path
+                    elif page_id and base_url:
+                        link = urljoin(base_url, f"pages/{page_id}")
+                    elif page_id:
+                        link = f"pages/{page_id}"
 
-                if not link_path:
-                    item_links = item.get("_links") if isinstance(item, dict) else None
-                    if isinstance(item_links, dict):
-                        link_path = item_links.get("webui") or item_links.get("self")
-
-                if not link_path and isinstance(content, dict):
-                    link_path = content.get("url")
-
-                if not link_path and isinstance(item, dict):
-                    link_path = item.get("url")
-
-                if link_path:
-                    if base_url:
-                        normalized_path = (
-                            link_path.lstrip("/")
-                            if isinstance(link_path, str) and link_path.startswith("/")
-                            else link_path
+                page_content = ""
+                if page_id:
+                    try:
+                        page_data = self.client.get_page_content(page_id)
+                        page_content = (
+                            page_data.get("body", {})
+                            .get("storage", {})
+                            .get("value", "")
+                            if isinstance(page_data, dict)
+                            else ""
                         )
-                        link = urljoin(base_url, normalized_path)
-                    else:
-                        link = link_path
-                elif page_id and base_url:
-                    link = urljoin(base_url, f"pages/{page_id}")
-                elif page_id:
-                    link = f"pages/{page_id}"
-                else:
-                    link = base_url.rstrip("/") or None
+                    except Exception as exception:  # pragma: no cover - network failure
+                        page_content = f"Unable to load page content: {exception}"
+
+                item_output = {
+                    "url": link,
+                    "title": title,
+                    "page_content": page_content,
+                }
+
+                excerpt = item.get("excerpt")
+                if excerpt:
+                    item_output["excerpt"] = excerpt
+
+                if item.get("last_modified"):
+                    item_output["last_modified"] = item.get("last_modified")
+
+                if item.get("space_key"):
+                    item_output["space_key"] = item.get("space_key")
 
                 if page_id:
-                    page_data = self.client.get_page_content(page_id)
-                    page_content = (
-                        page_data.get("body", {})
-                        .get("storage", {})
-                        .get("value", "")
-                        if isinstance(page_data, dict)
-                        else ""
-                    )
-                else:
-                    page_content = ""
+                    item_output["page_id"] = page_id
 
                 if link:
-                    items.append(
-                        {
-                            "url": link,
-                            "title": title,
-                            "page_content": page_content,
-                        }
-                    )
+                    items.append(item_output)
             output_data = items if items else []
         elif isinstance(search_result, dict) and search_result.get("message"):
             output_data = {
                 "error": f"There was a problem while searching pages: {search_result.get('message')}"
             }
         else:
-            output_data = {"error": str(search_result)}
+            message = None
+            if isinstance(search_result, dict):
+                message = search_result.get("error", {}).get("message")
+            output_data = {
+                "error": message or str(search_result)
+            }
 
         trace.outputs["results"] = output_data
 
