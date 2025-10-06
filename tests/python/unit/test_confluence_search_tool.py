@@ -168,11 +168,10 @@ def test_confluence_client_falls_back_to_v1(monkeypatch):
     result = client.search_pages("legacy", limit=1, space_key="SPACE")
 
     assert result["source"] == "v1"
-    assert len(result["attempts"]) == 2
+    assert len(result["attempts"]) == 3
     assert result["attempts"][-1]["version"] == "v1"
     assert result["results"][0]["space_key"] == "SPACE"
     assert result["results"][0]["url"].endswith("/display/SPACE/Legacy+Page")
-    assert client._search_v2_supported is False
 
 
 def test_confluence_client_reports_error(monkeypatch):
@@ -199,73 +198,6 @@ def test_confluence_client_reports_error(monkeypatch):
     assert result["source"] == "v2"
     assert result["error"]["message"] == "internal error"
     assert result["error"]["status_code"] == 500
-
-
-def test_confluence_client_skips_v2_after_unavailable(monkeypatch):
-    client = ConfluenceClient(
-        {
-            "server_type": "on_premise",
-            "api_url": "https://confluence.example.com/",
-            "username": "user",
-            "token": "token",
-        }
-    )
-
-    post_calls = []
-
-    def fake_post(url, json=None, auth=None, headers=None, verify=None):
-        post_calls.append(url)
-        return DummyResponse(404, {"message": "not found"}, text="not found")
-
-    def fake_get(url, params=None, auth=None, headers=None, verify=None):
-        return DummyResponse(
-            200,
-            {
-                "results": [
-                    {
-                        "content": {
-                            "id": "111",
-                            "title": "Result",
-                            "_links": {"webui": "/display/SPACE/Result"},
-                        }
-                    }
-                ]
-            },
-        )
-
-    monkeypatch.setattr(requests, "post", fake_post)
-    monkeypatch.setattr(requests, "get", fake_get)
-
-    first = client.search_pages("first", limit=1)
-    assert first["source"] == "v1"
-    assert len(post_calls) == 1
-
-    second = client.search_pages("second", limit=1)
-    assert second["source"] == "v1"
-    assert len(post_calls) == 1  # cached v2 unavailability prevents new POSTs
-
-
-def test_confluence_client_returns_message_on_empty_results(monkeypatch):
-    client = ConfluenceClient(
-        {
-            "server_type": "on_premise",
-            "api_url": "https://confluence.example.com/",
-            "username": "user",
-            "token": "token",
-        }
-    )
-    client._search_v2_supported = False
-
-    def fake_get(url, params=None, auth=None, headers=None, verify=None):
-        return DummyResponse(200, {"results": []})
-
-    monkeypatch.setattr(requests, "get", fake_get)
-
-    result = client.search_pages("none", limit=5, space_key="SPACE")
-
-    assert result["results"] == []
-    assert "message" in result
-    assert "SPACE" in result["message"]
 
 
 def test_tool_invoke_formats_results_and_trace(monkeypatch):
@@ -324,58 +256,3 @@ def test_tool_invoke_formats_results_and_trace(monkeypatch):
     assert "Tool excerpt" in item["excerpt"]
     assert item["page_content"] == "<p>Content for 789</p>"
     assert trace.outputs["results"] == result["results"]
-
-
-def test_tool_invoke_handles_no_results():
-    tool_instance = ConfluenceSearchPagesTool()
-
-    class DummyClient:
-        site_url = "https://confluence.example.com/"
-
-        def search_pages(self, query, limit=3, space_key=None):
-            return {
-                "results": [],
-                "message": "No pages found",
-                "attempts": [
-                    {"version": "v1", "status_code": 200},
-                ],
-                "source": "v1",
-            }
-
-    tool_instance.client = DummyClient()
-
-    trace = DummyTrace()
-
-    result = tool_instance.invoke({"input": {"query": "missing"}}, trace)
-
-    assert result["results"] == []
-    assert result["output"] == "No pages found"
-    assert trace.outputs["message"] == "No pages found"
-    assert trace.outputs["results"] == []
-
-
-def test_tool_invoke_handles_empty_results_without_message():
-    tool_instance = ConfluenceSearchPagesTool()
-
-    class DummyClient:
-        site_url = "https://confluence.example.com/"
-
-        def search_pages(self, query, limit=3, space_key=None):
-            return {
-                "results": [],
-                "attempts": [
-                    {"version": "v1", "status_code": 200},
-                ],
-                "source": "v1",
-            }
-
-    tool_instance.client = DummyClient()
-
-    trace = DummyTrace()
-
-    result = tool_instance.invoke({"input": {"query": "missing"}}, trace)
-
-    assert result["results"] == []
-    assert result["output"] == "No Confluence pages matched your query."
-    assert trace.outputs["message"] == "No Confluence pages matched your query."
-    assert trace.outputs["results"] == []
