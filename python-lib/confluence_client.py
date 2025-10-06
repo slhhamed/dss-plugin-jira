@@ -195,8 +195,7 @@ class ConfluenceClient(object):
             cql_parts.append(f'space="{space_key}"')
         cql_parts.append(f'text~"{query}"')
         cql_query = " AND ".join(cql_parts)
-        cql_query = f"{cql_query} ORDER BY lastmodified DESC"
-        return {"cql": cql_query, "limit": limit}
+        return f"{cql_query} ORDER BY lastmodified DESC"
 
     def _search_endpoint_candidates(self) -> List[Dict[str, str]]:
         base_url = self.site_url

@@ -180,6 +180,22 @@ def test_confluence_client_falls_back_to_v1(monkeypatch):
     assert result["results"][0]["url"].endswith("/display/SPACE/Legacy+Page")
 
 
+def test_compose_v1_cql_query_scopes_space():
+    client = ConfluenceClient(
+        {
+            "server_type": "on_premise",
+            "api_url": "https://confluence.example.com/",
+            "username": "user",
+            "token": "token",
+        }
+    )
+
+    cql = client._compose_v1_cql_query(query="Dataiku", space_key="AIEC")
+
+    assert cql.startswith('space="AIEC" AND text~"Dataiku"')
+    assert cql.endswith("ORDER BY lastmodified DESC")
+
+
 def test_confluence_client_reports_error(monkeypatch):
     client = ConfluenceClient(
         {
