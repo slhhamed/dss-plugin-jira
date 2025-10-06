@@ -18,8 +18,8 @@ class ConfluenceSearchPagesTool(BaseAgentTool):
         return {
             "description": (
                 "This tool searches Confluence pages using the provided keywords "
-                "and returns up to three results with their URLs, titles, and page "
-                "content."
+                "and returns up to the requested number of results with their URLs, "
+                "titles, and page content."
             ),
             "inputSchema": {
                 "$id": "https://dataiku.com/agents/tools/search/input",
@@ -84,7 +84,9 @@ class ConfluenceSearchPagesTool(BaseAgentTool):
 
         search_result = self.search_pages(query, space_key, limit_value)
 
+        raw_results = []
         if isinstance(search_result, dict):
+            raw_results = search_result.get("results") or []
             trace.attributes["search"] = {
                 "source": search_result.get("source"),
                 "attempts": search_result.get("attempts"),
@@ -94,7 +96,7 @@ class ConfluenceSearchPagesTool(BaseAgentTool):
 
         if isinstance(search_result, dict) and raw_results:
             items = []
-            for item in search_result.get("results", [])[:limit_value]:
+            for item in raw_results[:limit_value]:
                 title = item.get("title") or "Untitled"
                 page_id = item.get("id") or None
                 link = item.get("url")
