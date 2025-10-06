@@ -37,14 +37,7 @@ if "requests" not in sys.modules:
 
     requests_module.get = _request_stub
     requests_module.post = _request_stub
-    class _RequestException(Exception):
-        pass
 
-    requests_module.RequestException = _RequestException
-    class _Response:  # pragma: no cover - minimal placeholder
-        pass
-
-    requests_module.Response = _Response
     sys.modules["requests"] = requests_module
 
 if "numpy" not in sys.modules:
