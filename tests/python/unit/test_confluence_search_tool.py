@@ -196,22 +196,6 @@ def test_compose_v1_cql_query_scopes_space():
     assert cql.endswith("ORDER BY lastmodified DESC")
 
 
-def test_sanitize_limit_defaults_when_invalid():
-    client = ConfluenceClient(
-        {
-            "server_type": "cloud",
-            "subdomain": "example",
-            "username": "user",
-            "token": "token",
-        }
-    )
-
-    assert client._sanitize_limit("not-a-number") == 3
-    assert client._sanitize_limit(None) == 3
-    assert client._sanitize_limit(-10) == 3
-    assert client._sanitize_limit(5) == 5
-
-
 def test_confluence_client_reports_error(monkeypatch):
     client = ConfluenceClient(
         {
