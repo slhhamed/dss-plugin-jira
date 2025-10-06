@@ -3,6 +3,7 @@ import copy
 import logging
 import json
 import os
+from typing import Any, Dict, List, Optional
 import jira_api as api
 from pagination import Pagination
 from utils import extract_data_with_json_path
@@ -13,6 +14,36 @@ FILTERING_KEY_WITH_PARAMETER = 1
 logger = logging.getLogger(__name__)
 logging.basicConfig(level=logging.INFO,
                     format='jira plugin %(levelname)s - %(message)s')
+
+
+class JiraIssueCreationError(Exception):
+    """Custom exception for Jira issue creation failures."""
+
+    def __init__(self, status_code: int, error_messages: Optional[List[str]] = None,
+                 errors: Optional[Dict[str, Any]] = None, response_payload: Optional[Any] = None,
+                 response_text: str = ""):
+        self.status_code = status_code
+        self.error_messages = error_messages or []
+        self.errors = errors or {}
+        self.response_payload = response_payload
+        self.response_text = response_text
+
+        detailed_messages: List[str] = []
+        if self.errors:
+            detailed_messages.extend(
+                f"{field}: {message}" for field, message in self.errors.items() if message
+            )
+        if not detailed_messages and self.error_messages:
+            detailed_messages.extend(self.error_messages)
+        if not detailed_messages and isinstance(self.response_payload, dict) and self.response_payload:
+            detailed_messages.append(json.dumps(self.response_payload))
+        if not detailed_messages and self.response_text:
+            detailed_messages.append(self.response_text)
+        if not detailed_messages:
+            detailed_messages.append(f"Jira issue creation failed with status {self.status_code}")
+
+        message = "; ".join(detailed_messages)
+        super().__init__(message)
 
 
 class JiraClient(object):
@@ -236,8 +267,27 @@ class JiraClient(object):
         # This data form does not work on v3
         url = "/".join([self.get_site_url(), "rest/api/2/issue"])
         response = self.post(url=url, json=json)
-        json_response = response.json()
-        return json_response
+        response_payload = None
+        try:
+            response_payload = response.json()
+        except Exception:
+            response_payload = None
+
+        if response.status_code >= 400:
+            error_messages: List[str] = []
+            errors: Dict[str, Any] = {}
+            if isinstance(response_payload, dict):
+                error_messages = response_payload.get(api.API_ERROR_MESSAGES, []) or []
+                errors = response_payload.get("errors", {}) or {}
+            raise JiraIssueCreationError(
+                status_code=response.status_code,
+                error_messages=error_messages,
+                errors=errors,
+                response_payload=response_payload,
+                response_text=response.text,
+            )
+
+        return response_payload
 
     def get_auth(self):
         if self.is_opsgenie_api():
