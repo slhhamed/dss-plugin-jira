@@ -220,9 +220,12 @@ class ConfluenceClient(object):
         return payload
 
     def _build_v1_params(self, query: str, limit: int, space_key: Optional[str]) -> Dict[str, Any]:
-        normalized_space = self._normalize_space_key(space_key)
-        cql_query = self._compose_v1_cql_query(query=query, space_key=normalized_space)
-        return {"cql": cql_query, "limit": limit}
+        cql_parts = []
+        if space_key:
+            cql_parts.append(f'space="{space_key}"')
+        cql_parts.append(f'text~"{query}"')
+        cql_query = " AND ".join(cql_parts)
+        return f"{cql_query} ORDER BY lastmodified DESC"
 
     def _compose_v1_cql_query(self, query: str, space_key: Optional[str]) -> str:
         """Build the Confluence Query Language string for v1 searches.
