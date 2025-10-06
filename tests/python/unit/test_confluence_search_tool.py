@@ -144,7 +144,11 @@ def test_confluence_client_falls_back_to_v1(monkeypatch):
     def fake_post(url, json=None, auth=None, headers=None, verify=None):
         return DummyResponse(404, {"message": "not found"}, text="not found")
 
+    captured = {}
+
     def fake_get(url, params=None, auth=None, headers=None, verify=None):
+        captured["url"] = url
+        captured["params"] = params
         return DummyResponse(
             200,
             {
@@ -170,6 +174,8 @@ def test_confluence_client_falls_back_to_v1(monkeypatch):
     assert result["source"] == "v1"
     assert len(result["attempts"]) == 3
     assert result["attempts"][-1]["version"] == "v1"
+    assert captured["params"]["limit"] == 1
+    assert captured["params"]["cql"].startswith('space="SPACE" AND text~"legacy"')
     assert result["results"][0]["space_key"] == "SPACE"
     assert result["results"][0]["url"].endswith("/display/SPACE/Legacy+Page")
 

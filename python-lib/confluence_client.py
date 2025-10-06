@@ -190,9 +190,10 @@ class ConfluenceClient(object):
         return payload
 
     def _build_v1_params(self, query: str, limit: int, space_key: Optional[str]) -> Dict[str, Any]:
-        cql_parts = [f'text~"{query}"']
+        cql_parts = []
         if space_key:
             cql_parts.append(f'space="{space_key}"')
+        cql_parts.append(f'text~"{query}"')
         cql_query = " AND ".join(cql_parts)
         cql_query = f"{cql_query} ORDER BY lastmodified DESC"
         return {"cql": cql_query, "limit": limit}
