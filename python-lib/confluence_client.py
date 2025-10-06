@@ -177,16 +177,46 @@ class ConfluenceClient(object):
             return 3
         return parsed if parsed > 0 else 3
 
+    @staticmethod
+    def _normalize_query(query: Any) -> str:
+        if query is None:
+            return ""
+        if isinstance(query, str):
+            return query.strip()
+        return str(query)
+
+    @staticmethod
+    def _normalize_space_key(space_key: Optional[str]) -> Optional[str]:
+        if space_key is None:
+            return None
+        if isinstance(space_key, str):
+            stripped = space_key.strip()
+            return stripped or None
+        text = str(space_key).strip()
+        return text or None
+
+    @staticmethod
+    def _escape_cql_value(value: Any) -> str:
+        if value is None:
+            return ""
+        text = str(value)
+        text = text.replace("\\", "\\\\")
+        text = text.replace('"', '\\"')
+        return text
+
     def _build_v2_payload(self, query: str, limit: int, space_key: Optional[str]) -> Dict[str, Any]:
-        query_string = f'text ~ "{query}"'
+        normalized_query = self._normalize_query(query)
+        escaped_query = self._escape_cql_value(normalized_query)
+        query_string = f'text ~ "{escaped_query}"'
         payload: Dict[str, Any] = {
             "queryString": query_string,
             "entityType": ["page"],
             "limit": limit,
             "sort": "modified_date DESC",
         }
-        if space_key:
-            payload["spaceKeys"] = [space_key]
+        normalized_space = self._normalize_space_key(space_key)
+        if normalized_space:
+            payload["spaceKeys"] = [normalized_space]
         return payload
 
     def _build_v1_params(self, query: str, limit: int, space_key: Optional[str]) -> Dict[str, Any]:
@@ -194,6 +224,25 @@ class ConfluenceClient(object):
         if space_key:
             cql_parts.append(f'space="{space_key}"')
         cql_parts.append(f'text~"{query}"')
+        cql_query = " AND ".join(cql_parts)
+        return f"{cql_query} ORDER BY lastmodified DESC"
+
+    def _compose_v1_cql_query(self, query: str, space_key: Optional[str]) -> str:
+        """Build the Confluence Query Language string for v1 searches.
+
+        Space scoping is embedded directly in the CQL so that on-premises
+        instances honour the restriction instead of relying on a separate
+        ``space`` query parameter, which the endpoint ignores.
+        """
+
+        cql_parts = []
+        normalized_space = self._normalize_space_key(space_key)
+        if normalized_space:
+            escaped_space = self._escape_cql_value(normalized_space)
+            cql_parts.append(f'space="{escaped_space}"')
+        normalized_query = self._normalize_query(query)
+        escaped_query = self._escape_cql_value(normalized_query)
+        cql_parts.append(f'text~"{escaped_query}"')
         cql_query = " AND ".join(cql_parts)
         return f"{cql_query} ORDER BY lastmodified DESC"
 

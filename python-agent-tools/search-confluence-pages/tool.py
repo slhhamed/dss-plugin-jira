@@ -1,7 +1,9 @@
-from dataiku.llm.agent_tools import BaseAgentTool
 import json
 import logging
 from urllib.parse import urljoin
+
+from dataiku.llm.agent_tools import BaseAgentTool
+
 from utils import get_connection_details
 from confluence_client import ConfluenceClient
 
@@ -45,6 +47,23 @@ class ConfluenceSearchPagesTool(BaseAgentTool):
             },
         }
 
+    @staticmethod
+    def _sanitize_limit(value, default: int = 3) -> int:
+        try:
+            limit_value = int(value)
+        except (TypeError, ValueError):
+            return default
+        return limit_value if limit_value > 0 else default
+
+    def _normalize_space_key(self, space_key):
+        if isinstance(space_key, str):
+            stripped = space_key.strip()
+            return stripped or None
+        if space_key is None:
+            return None
+        text_value = str(space_key).strip()
+        return text_value or None
+
     def search_pages(self, query: str, space_key: str = None, limit: int = 3):
         try:
             return self.client.search_pages(query, limit=limit, space_key=space_key)
@@ -57,16 +76,17 @@ class ConfluenceSearchPagesTool(BaseAgentTool):
             }
 
     def invoke(self, input, trace):
-        args = input.get("input", {})
-        query = args.get("query")
-        space_key = args.get("space_key") or None
-        limit = args.get("limit", 3)
-        try:
-            limit_value = int(limit)
-        except (TypeError, ValueError):
-            limit_value = 3
-        if limit_value <= 0:
-            limit_value = 3
+        args = dict(input.get("input", {}))
+        query_value = args.get("query", "")
+        if isinstance(query_value, str):
+            query = query_value.strip()
+        elif query_value is None:
+            query = ""
+        else:
+            query = str(query_value)
+        space_key = self._normalize_space_key(args.get("space_key"))
+        limit_value = self._sanitize_limit(args.get("limit", 3))
+
         confluence_instance_url = self.client.site_url or ""
         base_url = (
             f"{confluence_instance_url.rstrip('/')}/"
@@ -75,8 +95,12 @@ class ConfluenceSearchPagesTool(BaseAgentTool):
         )
 
         trace.span["name"] = "CONFLUENCE_SEARCH_PAGES_TOOL_CALL"
-        for key, value in args.items():
-            trace.inputs[key] = value
+        trace_inputs = {
+            "query": query,
+            "limit": limit_value,
+            "space_key": space_key,
+        }
+        trace.inputs.update(trace_inputs)
         trace.attributes["config"] = {
             "confluence_instance_url": confluence_instance_url,
             "limit": limit_value,

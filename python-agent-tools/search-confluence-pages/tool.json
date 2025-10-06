@@ -3,7 +3,7 @@
     "meta": {
         "icon": "icon-search",
         "label": "Search Confluence Pages",
-        "description": "Search Confluence pages by keywords and return the first three results"
+        "description": "Search Confluence pages by keywords and return up to the configured number of results (default: 3)"
     },
     "params": [
         {
