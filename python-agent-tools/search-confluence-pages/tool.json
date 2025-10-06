@@ -29,6 +29,14 @@
             "type": "STRING",
             "description": "Optional key of the Confluence space to restrict the search. Leave empty to search all spaces.",
             "optional": true
+        },
+        {
+            "name": "limit",
+            "label": "Documents limit",
+            "type": "STRING",
+            "description": "Maximum number of Confluence pages to return (default: 3).",
+            "defaultValue": "3",
+            "optional": true
         }
     ]
 }

@@ -144,7 +144,11 @@ def test_confluence_client_falls_back_to_v1(monkeypatch):
     def fake_post(url, json=None, auth=None, headers=None, verify=None):
         return DummyResponse(404, {"message": "not found"}, text="not found")
 
+    captured = {}
+
     def fake_get(url, params=None, auth=None, headers=None, verify=None):
+        captured["url"] = url
+        captured["params"] = params
         return DummyResponse(
             200,
             {
@@ -170,8 +174,26 @@ def test_confluence_client_falls_back_to_v1(monkeypatch):
     assert result["source"] == "v1"
     assert len(result["attempts"]) == 3
     assert result["attempts"][-1]["version"] == "v1"
+    assert captured["params"]["limit"] == 1
+    assert captured["params"]["cql"].startswith('space="SPACE" AND text~"legacy"')
     assert result["results"][0]["space_key"] == "SPACE"
     assert result["results"][0]["url"].endswith("/display/SPACE/Legacy+Page")
+
+
+def test_compose_v1_cql_query_scopes_space():
+    client = ConfluenceClient(
+        {
+            "server_type": "on_premise",
+            "api_url": "https://confluence.example.com/",
+            "username": "user",
+            "token": "token",
+        }
+    )
+
+    cql = client._compose_v1_cql_query(query="Dataiku", space_key="AIEC")
+
+    assert cql.startswith('space="AIEC" AND text~"Dataiku"')
+    assert cql.endswith("ORDER BY lastmodified DESC")
 
 
 def test_confluence_client_reports_error(monkeypatch):

@@ -190,12 +190,23 @@ class ConfluenceClient(object):
         return payload
 
     def _build_v1_params(self, query: str, limit: int, space_key: Optional[str]) -> Dict[str, Any]:
-        cql_parts = [f'text~"{query}"']
+        cql_query = self._compose_v1_cql_query(query=query, space_key=space_key)
+        return {"cql": cql_query, "limit": limit}
+
+    def _compose_v1_cql_query(self, query: str, space_key: Optional[str]) -> str:
+        """Build the Confluence Query Language string for v1 searches.
+
+        Space scoping is embedded directly in the CQL so that on-premises
+        instances honour the restriction instead of relying on a separate
+        ``space`` query parameter, which the endpoint ignores.
+        """
+
+        cql_parts = []
         if space_key:
             cql_parts.append(f'space="{space_key}"')
+        cql_parts.append(f'text~"{query}"')
         cql_query = " AND ".join(cql_parts)
-        cql_query = f"{cql_query} ORDER BY lastmodified DESC"
-        return {"cql": cql_query, "limit": limit}
+        return f"{cql_query} ORDER BY lastmodified DESC"
 
     def _search_endpoint_candidates(self) -> List[Dict[str, str]]:
         base_url = self.site_url
