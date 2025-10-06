@@ -116,8 +116,12 @@ class ConfluenceClient(object):
 
             if version == "v2" and response.status_code in {404, 405}:
                 attempt_record["error"] = "search endpoint unavailable"
+                self._search_v2_supported = False
                 attempts.append(attempt_record)
                 continue
+
+            if version == "v2" and response.status_code < 400:
+                self._search_v2_supported = True
 
             if response.status_code >= 400:
                 error_payload = self._safe_json(response)
@@ -246,22 +250,44 @@ class ConfluenceClient(object):
         cql_query = " AND ".join(cql_parts)
         return f"{cql_query} ORDER BY lastmodified DESC"
 
+    def _compose_v1_cql_query(self, query: str, space_key: Optional[str]) -> str:
+        """Build the Confluence Query Language string for v1 searches.
+
+        Space scoping is embedded directly in the CQL so that on-premises
+        instances honour the restriction instead of relying on a separate
+        ``space`` query parameter, which the endpoint ignores.
+        """
+
+        cql_parts = []
+        normalized_space = self._normalize_space_key(space_key)
+        if normalized_space:
+            escaped_space = self._escape_cql_value(normalized_space)
+            cql_parts.append(f'space="{escaped_space}"')
+        normalized_query = self._normalize_query(query)
+        escaped_query = self._escape_cql_value(normalized_query)
+        cql_parts.append(f'text~"{escaped_query}"')
+        cql_query = " AND ".join(cql_parts)
+        return f"{cql_query} ORDER BY lastmodified DESC"
+
     def _search_endpoint_candidates(self) -> List[Dict[str, str]]:
         base_url = self.site_url
         candidates: List[Dict[str, str]] = []
 
-        # Primary v2 endpoint relative to the configured site URL.
-        v2_primary = urljoin(base_url, "api/v2/search")
-        candidates.append({"version": "v2", "method": "POST", "url": v2_primary})
+        prefer_v2 = self.server_type == "cloud" and self._search_v2_supported is not False
 
-        # Some on-prem instances expose v2 under /wiki/api/v2/ even when the
-        # configured base URL does not include /wiki/.
-        v2_alt = urljoin(base_url, "wiki/api/v2/search")
-        if v2_alt != v2_primary:
-            candidates.append({"version": "v2", "method": "POST", "url": v2_alt})
+        if prefer_v2:
+            # Primary v2 endpoint relative to the configured site URL.
+            v2_primary = urljoin(base_url, "api/v2/search")
+            candidates.append({"version": "v2", "method": "POST", "url": v2_primary})
+
+            # Some instances expose v2 under /wiki/api/v2/ even when the base URL
+            # does not include /wiki/.
+            v2_alt = urljoin(base_url, "wiki/api/v2/search")
+            if v2_alt != v2_primary:
+                candidates.append({"version": "v2", "method": "POST", "url": v2_alt})
 
         # Legacy v1 endpoint fallback.
-        v1_url = urljoin(base_url, "rest/api/search")
+        v1_url = urljoin(base_url, "rest/api/content/search")
         candidates.append({"version": "v1", "method": "GET", "url": v1_url})
 
         return candidates

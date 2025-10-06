@@ -131,7 +131,7 @@ def test_confluence_client_prefers_v2(monkeypatch):
     assert result["results"][0]["url"].endswith("/wiki/spaces/SPACE/pages/123/Demo+Page")
 
 
-def test_confluence_client_falls_back_to_v1(monkeypatch):
+def test_confluence_client_uses_v1_on_on_prem(monkeypatch):
     client = ConfluenceClient(
         {
             "server_type": "on_premise",
@@ -141,8 +141,10 @@ def test_confluence_client_falls_back_to_v1(monkeypatch):
         }
     )
 
-    def fake_post(url, json=None, auth=None, headers=None, verify=None):
-        return DummyResponse(404, {"message": "not found"}, text="not found")
+    captured = {}
+
+    def fake_post(*args, **kwargs):  # pragma: no cover - defensive guard
+        raise AssertionError("v2 search should not be attempted for on-prem instances")
 
     captured = {}
 
@@ -164,7 +166,7 @@ def test_confluence_client_falls_back_to_v1(monkeypatch):
                     }
                 ]
             },
-        )
+    )
 
     monkeypatch.setattr(requests, "post", fake_post)
     monkeypatch.setattr(requests, "get", fake_get)
