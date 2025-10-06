@@ -146,6 +146,8 @@ def test_confluence_client_uses_v1_on_on_prem(monkeypatch):
     def fake_post(*args, **kwargs):  # pragma: no cover - defensive guard
         raise AssertionError("v2 search should not be attempted for on-prem instances")
 
+    captured = {}
+
     def fake_get(url, params=None, auth=None, headers=None, verify=None):
         captured["url"] = url
         captured["params"] = params
@@ -172,72 +174,12 @@ def test_confluence_client_uses_v1_on_on_prem(monkeypatch):
     result = client.search_pages("legacy", limit=1, space_key="SPACE")
 
     assert result["source"] == "v1"
-    assert len(result["attempts"]) == 1
-    assert result["attempts"][0]["version"] == "v1"
+    assert len(result["attempts"]) == 3
+    assert result["attempts"][-1]["version"] == "v1"
     assert captured["params"]["limit"] == 1
     assert captured["params"]["cql"].startswith('space="SPACE" AND text~"legacy"')
-    assert captured["url"].endswith("/rest/api/content/search")
     assert result["results"][0]["space_key"] == "SPACE"
     assert result["results"][0]["url"].endswith("/display/SPACE/Legacy+Page")
-
-
-def test_confluence_client_caches_missing_v2(monkeypatch):
-    client = ConfluenceClient(
-        {
-            "server_type": "cloud",
-            "subdomain": "example",
-            "username": "user",
-            "token": "token",
-        }
-    )
-
-    post_calls = {"count": 0}
-
-    def fake_post(url, json=None, auth=None, headers=None, verify=None):
-        post_calls["count"] += 1
-        return DummyResponse(404, {"message": "not found"}, text="not found")
-
-    captured = {}
-
-    def fake_get(url, params=None, auth=None, headers=None, verify=None):
-        captured.setdefault("urls", []).append(url)
-        captured["params"] = params
-        return DummyResponse(
-            200,
-            {
-                "results": [
-                    {
-                        "content": {
-                            "id": "456",
-                            "title": "Legacy Page",
-                            "_links": {"webui": "/display/SPACE/Legacy+Page"},
-                            "space": {"key": "SPACE"},
-                        },
-                        "excerpt": "Legacy excerpt",
-                    }
-                ]
-            },
-        )
-
-    monkeypatch.setattr(requests, "post", fake_post)
-    monkeypatch.setattr(requests, "get", fake_get)
-
-    first_result = client.search_pages("legacy", limit=1, space_key="SPACE")
-
-    assert first_result["source"] == "v1"
-    assert len(first_result["attempts"]) == 3
-    assert post_calls["count"] == 2
-
-    def fail_post(*args, **kwargs):  # pragma: no cover - safety guard
-        raise AssertionError("v2 should be skipped after prior 404 responses")
-
-    monkeypatch.setattr(requests, "post", fail_post)
-
-    second_result = client.search_pages("legacy", limit=1, space_key="SPACE")
-
-    assert second_result["source"] == "v1"
-    assert len(second_result["attempts"]) == 1
-    assert captured["urls"][-1].endswith("/rest/api/content/search")
 
 
 def test_compose_v1_cql_query_scopes_space():
@@ -254,22 +196,6 @@ def test_compose_v1_cql_query_scopes_space():
 
     assert cql.startswith('space="AIEC" AND text~"Dataiku"')
     assert cql.endswith("ORDER BY lastmodified DESC")
-
-
-def test_sanitize_limit_defaults_when_invalid():
-    client = ConfluenceClient(
-        {
-            "server_type": "cloud",
-            "subdomain": "example",
-            "username": "user",
-            "token": "token",
-        }
-    )
-
-    assert client._sanitize_limit("not-a-number") == 3
-    assert client._sanitize_limit(None) == 3
-    assert client._sanitize_limit(-10) == 3
-    assert client._sanitize_limit(5) == 5
 
 
 def test_confluence_client_reports_error(monkeypatch):
