@@ -131,7 +131,7 @@ def test_confluence_client_prefers_v2(monkeypatch):
     assert result["results"][0]["url"].endswith("/wiki/spaces/SPACE/pages/123/Demo+Page")
 
 
-def test_confluence_client_falls_back_to_v1(monkeypatch):
+def test_confluence_client_uses_v1_on_on_prem(monkeypatch):
     client = ConfluenceClient(
         {
             "server_type": "on_premise",
@@ -141,10 +141,71 @@ def test_confluence_client_falls_back_to_v1(monkeypatch):
         }
     )
 
-    def fake_post(url, json=None, auth=None, headers=None, verify=None):
-        return DummyResponse(404, {"message": "not found"}, text="not found")
+    captured = {}
+
+    def fake_post(*args, **kwargs):  # pragma: no cover - defensive guard
+        raise AssertionError("v2 search should not be attempted for on-prem instances")
 
     def fake_get(url, params=None, auth=None, headers=None, verify=None):
+        captured["url"] = url
+        captured["params"] = params
+        captured["params_dict"] = dict(params or [])
+        return DummyResponse(
+            200,
+            {
+                "results": [
+                    {
+                        "content": {
+                            "id": "456",
+                            "title": "Legacy Page",
+                            "_links": {"webui": "/display/SPACE/Legacy+Page"},
+                            "space": {"key": "SPACE"},
+                        },
+                        "excerpt": "Legacy excerpt",
+                    }
+                ]
+            },
+    )
+
+    monkeypatch.setattr(requests, "post", fake_post)
+    monkeypatch.setattr(requests, "get", fake_get)
+
+    result = client.search_pages("legacy", limit=1, space_key="SPACE")
+
+    assert result["source"] == "v1"
+    assert len(result["attempts"]) == 1
+    assert result["attempts"][0]["version"] == "v1"
+    params_dict = captured["params_dict"]
+    assert params_dict["limit"] == 1
+    assert params_dict["cql"].startswith('space="SPACE" AND text~"legacy"')
+    assert captured["url"].endswith("/rest/api/content/search")
+    assert result["results"][0]["space_key"] == "SPACE"
+    assert result["results"][0]["url"].endswith("/display/SPACE/Legacy+Page")
+
+
+def test_confluence_client_caches_missing_v2(monkeypatch):
+    client = ConfluenceClient(
+        {
+            "server_type": "cloud",
+            "subdomain": "example",
+            "username": "user",
+            "token": "token",
+        }
+    )
+
+    post_calls = {"count": 0}
+
+    def fake_post(url, json=None, auth=None, headers=None, verify=None):
+        post_calls["count"] += 1
+        return DummyResponse(404, {"message": "not found"}, text="not found")
+
+    captured = {}
+
+    def fake_get(url, params=None, auth=None, headers=None, verify=None):
+        captured.setdefault("urls", []).append(url)
+        captured["params"] = params
+        captured.setdefault("params_dict", dict())
+        captured["params_dict"] = dict(params or [])
         return DummyResponse(
             200,
             {
@@ -165,13 +226,54 @@ def test_confluence_client_falls_back_to_v1(monkeypatch):
     monkeypatch.setattr(requests, "post", fake_post)
     monkeypatch.setattr(requests, "get", fake_get)
 
-    result = client.search_pages("legacy", limit=1, space_key="SPACE")
+    first_result = client.search_pages("legacy", limit=1, space_key="SPACE")
 
-    assert result["source"] == "v1"
-    assert len(result["attempts"]) == 3
-    assert result["attempts"][-1]["version"] == "v1"
-    assert result["results"][0]["space_key"] == "SPACE"
-    assert result["results"][0]["url"].endswith("/display/SPACE/Legacy+Page")
+    assert first_result["source"] == "v1"
+    assert len(first_result["attempts"]) == 3
+    assert post_calls["count"] == 2
+
+    def fail_post(*args, **kwargs):  # pragma: no cover - safety guard
+        raise AssertionError("v2 should be skipped after prior 404 responses")
+
+    monkeypatch.setattr(requests, "post", fail_post)
+
+    second_result = client.search_pages("legacy", limit=1, space_key="SPACE")
+
+    assert second_result["source"] == "v1"
+    assert len(second_result["attempts"]) == 1
+    assert captured["urls"][-1].endswith("/rest/api/content/search")
+
+
+def test_compose_v1_cql_query_scopes_space():
+    client = ConfluenceClient(
+        {
+            "server_type": "on_premise",
+            "api_url": "https://confluence.example.com/",
+            "username": "user",
+            "token": "token",
+        }
+    )
+
+    cql = client._compose_v1_cql_query(query="Dataiku", space_key="AIEC")
+
+    assert cql.startswith('space="AIEC" AND text~"Dataiku"')
+    assert cql.endswith("ORDER BY lastmodified DESC")
+
+
+def test_sanitize_limit_defaults_when_invalid():
+    client = ConfluenceClient(
+        {
+            "server_type": "cloud",
+            "subdomain": "example",
+            "username": "user",
+            "token": "token",
+        }
+    )
+
+    assert client._sanitize_limit("not-a-number") == 3
+    assert client._sanitize_limit(None) == 3
+    assert client._sanitize_limit(-10) == 3
+    assert client._sanitize_limit(5) == 5
 
 
 def test_confluence_client_reports_error(monkeypatch):
@@ -198,6 +300,7 @@ def test_confluence_client_reports_error(monkeypatch):
     assert result["source"] == "v2"
     assert result["error"]["message"] == "internal error"
     assert result["error"]["status_code"] == 500
+    assert result["message"] == "internal error"
 
 
 def test_tool_invoke_formats_results_and_trace(monkeypatch):
@@ -248,6 +351,9 @@ def test_tool_invoke_formats_results_and_trace(monkeypatch):
     )
 
     assert trace.attributes["config"]["limit"] == 1
+    assert trace.inputs["query"] == "tool"
+    assert trace.inputs["limit"] == 1
+    assert trace.inputs["space_key"] == "SPACE"
     assert trace.attributes["search"]["source"] == "v2"
     assert trace.attributes["search"]["space_key"] == "SPACE"
     assert len(result["results"]) == 1
@@ -256,3 +362,112 @@ def test_tool_invoke_formats_results_and_trace(monkeypatch):
     assert "Tool excerpt" in item["excerpt"]
     assert item["page_content"] == "<p>Content for 789</p>"
     assert trace.outputs["results"] == result["results"]
+
+
+
+def test_compose_v1_cql_query_escapes_special_characters():
+    client = ConfluenceClient(
+        {
+            "server_type": "on_premise",
+            "api_url": "https://confluence.example.com/",
+            "username": "user",
+            "token": "token",
+        }
+    )
+
+    raw_query = 'Data "iku" \\ story'
+    raw_space = ' A"IEC '
+    cql = client._compose_v1_cql_query(
+        query=raw_query,
+        space_key=raw_space,
+    )
+
+    expected_space = raw_space.strip().replace("\\", "\\\\").replace('"', '\\"')
+    expected_query = raw_query.strip().replace("\\", "\\\\").replace('"', '\\"')
+
+    assert f'space="{expected_space}"' in cql
+    assert f'text~"{expected_query}"' in cql
+    assert cql.endswith('ORDER BY lastmodified DESC')
+
+
+def test_build_v2_payload_normalizes_inputs():
+    client = ConfluenceClient(
+        {
+            "server_type": "cloud",
+            "subdomain": "example",
+            "username": "user",
+            "token": "token",
+        }
+    )
+
+    raw_query = '  Demo  "story"  '
+    payload = client._build_v2_payload(
+        query=raw_query,
+        limit=5,
+        space_key=' SPACE ',
+    )
+
+    expected_query = raw_query.strip().replace("\\", "\\\\").replace('"', '\\"')
+
+    assert payload["queryString"] == f'text ~ "{expected_query}"'
+    assert payload["limit"] == 5
+    assert payload["spaceKeys"] == ["SPACE"]
+
+
+
+def test_tool_invoke_sanitizes_inputs():
+    tool_instance = ConfluenceSearchPagesTool()
+
+    captured = {}
+
+    class DummyClient:
+        site_url = "https://confluence.example.com/"
+
+        def search_pages(self, query, limit=3, space_key=None):
+            captured["query"] = query
+            captured["limit"] = limit
+            captured["space_key"] = space_key
+            return {"results": [], "source": "v1", "attempts": []}
+
+    tool_instance.client = DummyClient()
+
+    trace = DummyTrace()
+
+    result = tool_instance.invoke(
+        {"input": {"query": "  trimmed  ", "space_key": "   ", "limit": "invalid"}},
+        trace,
+    )
+
+    assert captured == {"query": "trimmed", "limit": 3, "space_key": None}
+    assert trace.inputs["query"] == "trimmed"
+    assert trace.inputs["limit"] == 3
+    assert trace.inputs["space_key"] is None
+    assert trace.attributes["config"]["limit"] == 3
+    assert trace.attributes["search"]["source"] == "v1"
+    assert trace.attributes["search"]["space_key"] is None
+    assert result["results"] == []
+    assert result["output"] == "No Confluence pages matched your query."
+
+
+def test_tool_invoke_surfaces_error_message():
+    tool_instance = ConfluenceSearchPagesTool()
+
+    class DummyClient:
+        site_url = "https://confluence.example.com/"
+
+        def search_pages(self, query, limit=3, space_key=None):
+            return {
+                "results": [],
+                "source": "v1",
+                "attempts": [],
+                "message": "cql query parameter is required",
+            }
+
+    tool_instance.client = DummyClient()
+
+    trace = DummyTrace()
+
+    result = tool_instance.invoke({"input": {"query": "demo"}}, trace)
+
+    assert result["output"] == "cql query parameter is required"
+    assert trace.outputs["message"] == "cql query parameter is required"
