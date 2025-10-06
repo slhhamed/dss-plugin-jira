@@ -78,11 +78,6 @@ class ConfluenceClient(object):
             url = endpoint["url"]
             method = endpoint["method"]
 
-            if version == "v2" and self._search_v2_supported is False:
-                # Skip any additional v2 attempts once we have confirmed the
-                # endpoint is unavailable for this deployment.
-                continue
-
             try:
                 if version == "v2":
                     response = requests.post(
@@ -122,7 +117,6 @@ class ConfluenceClient(object):
             if version == "v2" and response.status_code in {404, 405}:
                 attempt_record["error"] = "search endpoint unavailable"
                 attempts.append(attempt_record)
-                self._search_v2_supported = False
                 continue
 
             if response.status_code >= 400:
@@ -158,30 +152,12 @@ class ConfluenceClient(object):
 
             attempts.append(attempt_record)
             normalized_results = self._normalize_results(payload, version)
-            if version == "v2":
-                self._search_v2_supported = True
-            elif version == "v1" and self._search_v2_supported is None:
-                # v1 succeeded without a prior definitive v2 failure; cache the
-                # fact that we effectively operate in v1-only mode.
-                self._search_v2_supported = False
-
-            result_payload: Dict[str, Any] = {
+            return {
                 "results": normalized_results,
                 "raw": payload,
                 "attempts": attempts,
                 "source": version,
             }
-
-            if not normalized_results:
-                message = "No Confluence pages matched your query."
-                if space_key:
-                    message = (
-                        f"No Confluence pages found in space '{space_key}' "
-                        f"for query '{query}'."
-                    )
-                result_payload["message"] = message
-
-            return result_payload
 
         return {
             "results": [],
@@ -225,16 +201,15 @@ class ConfluenceClient(object):
         base_url = self.site_url
         candidates: List[Dict[str, str]] = []
 
-        if self._search_v2_supported is not False:
-            # Primary v2 endpoint relative to the configured site URL.
-            v2_primary = urljoin(base_url, "api/v2/search")
-            candidates.append({"version": "v2", "method": "POST", "url": v2_primary})
+        # Primary v2 endpoint relative to the configured site URL.
+        v2_primary = urljoin(base_url, "api/v2/search")
+        candidates.append({"version": "v2", "method": "POST", "url": v2_primary})
 
-            # Some on-prem instances expose v2 under /wiki/api/v2/ even when the
-            # configured base URL does not include /wiki/.
-            v2_alt = urljoin(base_url, "wiki/api/v2/search")
-            if v2_alt != v2_primary:
-                candidates.append({"version": "v2", "method": "POST", "url": v2_alt})
+        # Some on-prem instances expose v2 under /wiki/api/v2/ even when the
+        # configured base URL does not include /wiki/.
+        v2_alt = urljoin(base_url, "wiki/api/v2/search")
+        if v2_alt != v2_primary:
+            candidates.append({"version": "v2", "method": "POST", "url": v2_alt})
 
         # Legacy v1 endpoint fallback.
         v1_url = urljoin(base_url, "rest/api/search")

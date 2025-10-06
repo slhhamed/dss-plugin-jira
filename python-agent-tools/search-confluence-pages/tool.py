@@ -91,24 +91,10 @@ class ConfluenceSearchPagesTool(BaseAgentTool):
                 "space_key": space_key,
             }
 
-        if isinstance(search_result, dict) and search_result.get("error"):
-            error_message = search_result["error"].get("message")
-            output_data = {
-                "error": error_message
-                or "There was a problem while searching Confluence pages.",
-            }
-            trace.outputs["error"] = output_data
-            trace.outputs["results"] = output_data
-            return {"output": output_data["error"], "results": output_data}
-
-        if isinstance(search_result, dict):
-            raw_results = search_result.get("results") or []
-        else:
-            raw_results = []
 
         if isinstance(search_result, dict) and raw_results:
             items = []
-            for item in raw_results[:limit_value]:
+            for item in search_result.get("results", [])[:limit_value]:
                 title = item.get("title") or "Untitled"
                 page_id = item.get("id") or None
                 link = item.get("url")
@@ -179,6 +165,13 @@ class ConfluenceSearchPagesTool(BaseAgentTool):
             trace.outputs["results"] = []
             return {"output": output_message, "results": []}
         else:
-            message = str(search_result)
-            trace.outputs["error"] = {"error": message}
-            return {"output": message, "results": {"error": message}}
+            message = None
+            if isinstance(search_result, dict):
+                message = search_result.get("error", {}).get("message")
+            output_data = {
+                "error": message or str(search_result)
+            }
+
+        trace.outputs["results"] = output_data
+
+        return {"output": json.dumps(output_data), "results": output_data}
