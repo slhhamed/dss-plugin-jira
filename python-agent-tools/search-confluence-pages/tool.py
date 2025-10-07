@@ -10,7 +10,7 @@ from confluence_client import ConfluenceClient
 
 class ConfluenceSearchPagesTool(BaseAgentTool):
     def set_config(self, config, plugin_config):
-        logging.getLogger("jiraapiclient.discovery").setLevel("INFO")
+        logging.getLogger("confluence_client").setLevel("INFO")
         logging.info("ConfluenceSearchPagesTool init")
         self.config = config
         connection_details = get_connection_details(config)
@@ -104,6 +104,7 @@ class ConfluenceSearchPagesTool(BaseAgentTool):
         trace.attributes["config"] = {
             "confluence_instance_url": confluence_instance_url,
             "limit": limit_value,
+            "space_key": space_key,
         }
 
         search_result = self.search_pages(query, space_key, limit_value)
@@ -186,6 +187,9 @@ class ConfluenceSearchPagesTool(BaseAgentTool):
             message = search_result.get("message")
             attempts = search_result.get("attempts", [])
             trace.attributes.setdefault("search", {})["attempts"] = attempts
+            error_info = search_result.get("error") if isinstance(search_result.get("error"), dict) else {}
+            if not message and error_info:
+                message = error_info.get("message")
             output_message = message or "No Confluence pages matched your query."
             trace.outputs["message"] = output_message
             trace.outputs["results"] = []
