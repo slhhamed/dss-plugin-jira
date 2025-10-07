@@ -84,8 +84,18 @@ class ConfluenceSearchPagesTool(BaseAgentTool):
             query = ""
         else:
             query = str(query_value)
-        space_key = self._normalize_space_key(args.get("space_key"))
-        limit_value = self._sanitize_limit(args.get("limit", 3))
+        default_space = None
+        if hasattr(self, "config") and isinstance(getattr(self, "config"), dict):
+            default_space = self.config.get("space_key")
+        space_key = self._normalize_space_key(
+            args.get("space_key") or default_space
+        )
+        default_limit = 3
+        if hasattr(self, "config") and isinstance(getattr(self, "config"), dict):
+            default_limit = self.config.get("limit", 3)
+        limit_value = self._sanitize_limit(
+            args.get("limit", default_limit), default=default_limit
+        )
 
         confluence_instance_url = self.client.site_url or ""
         base_url = (
