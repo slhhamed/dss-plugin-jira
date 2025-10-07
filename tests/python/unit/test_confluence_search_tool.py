@@ -1,4 +1,5 @@
 import importlib.util
+import json
 import sys
 import types
 from pathlib import Path
@@ -10,14 +11,16 @@ ROOT_DIR = Path(__file__).resolve().parents[3]
 sys.path.append(str(ROOT_DIR / "python-lib"))
 
 
+# ---------------------------------------------------------------------------
+# Lightweight stubs so the tool module can be imported in isolation
+# ---------------------------------------------------------------------------
 if "dataiku" not in sys.modules:
     dataiku_module = types.ModuleType("dataiku")
     llm_module = types.ModuleType("dataiku.llm")
     agent_tools_module = types.ModuleType("dataiku.llm.agent_tools")
 
-    class _BaseAgentTool:  # pragma: no cover - trivial stub
-        def __init__(self, *args, **kwargs):
-            pass
+    class _BaseAgentTool:  # pragma: no cover - minimal shim
+        pass
 
     agent_tools_module.BaseAgentTool = _BaseAgentTool
     llm_module.agent_tools = agent_tools_module
@@ -31,20 +34,32 @@ if "dataiku" not in sys.modules:
 if "requests" not in sys.modules:
     requests_module = types.ModuleType("requests")
 
-    def _request_stub(*args, **kwargs):  # pragma: no cover - safety stub
-        raise NotImplementedError("The requests module is not available in the test environment.")
-
-    requests_module.get = _request_stub
-    requests_module.post = _request_stub
-
     class _RequestException(Exception):
         pass
 
-    requests_module.RequestException = _RequestException
-
     class _Response:  # pragma: no cover - minimal placeholder
-        pass
+        def __init__(self, status_code=200, payload=None, text="", ok=True):
+            self.status_code = status_code
+            self._payload = payload
+            self.text = text
+            self.ok = ok
+            self.content = b"{}" if payload is not None else b""
 
+        def json(self):
+            if self._payload is None:
+                raise ValueError("No JSON payload available")
+            return self._payload
+
+    class _Session:
+        def __init__(self):
+            self.headers = {}
+            self.verify = True
+
+        def request(self, *args, **kwargs):  # pragma: no cover - guard
+            raise NotImplementedError("requests stub is not configured")
+
+    requests_module.Session = _Session
+    requests_module.RequestException = _RequestException
     requests_module.Response = _Response
     sys.modules["requests"] = requests_module
 
@@ -68,12 +83,16 @@ from confluence_client import ConfluenceClient
 
 
 class DummyResponse:
-    def __init__(self, status_code, payload, text=""):
+    def __init__(self, status_code=200, payload=None, text="", ok=None):
         self.status_code = status_code
         self._payload = payload
-        self.text = text or ""
+        self.text = text
+        self.ok = True if ok is None else ok
+        self.content = b"{}" if payload is not None else b""
 
     def json(self):
+        if self._payload is None:
+            raise ValueError("No JSON payload available")
         return self._payload
 
 
@@ -85,59 +104,85 @@ class DummyTrace:
         self.attributes = {}
 
 
-def test_confluence_client_prefers_v2(monkeypatch):
-    client = ConfluenceClient(
-        {
-            "server_type": "cloud",
-            "subdomain": "example",
+def _load_tool():
+    tool = ConfluenceSearchPagesTool()
+    config = {
+        "access_type": "token_access",
+        "token_access": {
+            "server_type": "on_premise",
+            "api_url": "https://confluence.example.com/",
+            "ignore_ssl_check": False,
             "username": "user",
             "token": "token",
+        },
+        "space_key": "AIEC",
+        "limit": "5",
+    }
+    tool.set_config(config, {})
+    return tool
+
+
+def test_confluence_client_builds_expected_cql(monkeypatch):
+    captured = {}
+
+    def fake_request(self, method, url, params=None, **kwargs):
+        captured["method"] = method
+        captured["url"] = url
+        captured["params"] = params
+        payload = {
+            "results": [
+                {
+                    "id": "123",
+                    "title": "Dataiku Page",
+                    "_links": {"webui": "/display/AIEC/Dataiku"},
+                    "excerpt": "Snippet",
+                    "lastModified": "2024-01-01T00:00:00Z",
+                    "space": {"key": "AIEC"},
+                }
+            ]
+        }
+        return DummyResponse(payload=payload)
+
+    monkeypatch.setattr(requests.Session, "request", fake_request)
+
+    client = ConfluenceClient(
+        {
+            "server_type": "on_premise",
+            "api_url": "https://confluence.example.com/",
+            "ignore_ssl_check": False,
+            "username": "user",
+            "token": "pass",
         }
     )
 
-    captured = {}
+    result = client.search_pages("what is Dataiku?", limit=3, space_key="AIEC")
 
-    def fake_post(url, json=None, auth=None, headers=None, verify=None):
-        captured["url"] = url
-        captured["json"] = json
-        return DummyResponse(
-            200,
-            {
-                "results": [
-                    {
-                        "content": {
-                            "id": "123",
-                            "title": "Demo Page",
-                            "_links": {"webui": "/wiki/spaces/SPACE/pages/123/Demo+Page"},
-                        },
-                        "excerpt": "Demo excerpt",
-                    }
-                ]
-            },
-        )
+    assert captured["method"] == "GET"
+    assert captured["url"].endswith("/rest/api/search")
+    assert captured["params"]["limit"] == 3
+    assert (
+        captured["params"]["cql"]
+        == 'type=page AND space = "AIEC" AND text ~ "what is Dataiku" ORDER BY lastmodified DESC'
+    )
+    assert result["attempts"][0] == (
+        'CQL=type=page AND space = "AIEC" AND text ~ "what is Dataiku" ORDER BY lastmodified DESC'
+    )
+    assert result["results"][0]["url"].endswith("/display/AIEC/Dataiku")
+    assert result["results"][0]["space_key"] == "AIEC"
 
-    def fake_get(*args, **kwargs):  # pragma: no cover - defensive fallback
-        raise AssertionError("v1 search should not be used when v2 succeeds")
 
-    monkeypatch.setattr(requests, "post", fake_post)
-    monkeypatch.setattr(requests, "get", fake_get)
+def test_confluence_client_returns_error_message(monkeypatch):
+    def fake_request(self, method, url, params=None, **kwargs):
+        payload = {"message": "cql query parameter is required"}
+        return DummyResponse(status_code=400, payload=payload, text=json.dumps(payload), ok=False)
 
-    result = client.search_pages("demo", limit=2, space_key="SPACE")
-
-    assert result["source"] == "v2"
-    assert captured["json"]["spaceKeys"] == ["SPACE"]
-    assert captured["json"]["limit"] == 2
-    assert result["results"][0]["title"] == "Demo Page"
-    assert result["results"][0]["url"].endswith("/wiki/spaces/SPACE/pages/123/Demo+Page")
-
+    monkeypatch.setattr(requests.Session, "request", fake_request)
 
 def test_confluence_client_uses_v1_on_on_prem(monkeypatch):
     client = ConfluenceClient(
         {
             "server_type": "on_premise",
             "api_url": "https://confluence.example.com/",
-            "username": "user",
-            "token": "token",
         }
     )
 
@@ -168,10 +213,9 @@ def test_confluence_client_uses_v1_on_on_prem(monkeypatch):
             },
     )
 
-    monkeypatch.setattr(requests, "post", fake_post)
-    monkeypatch.setattr(requests, "get", fake_get)
 
-    result = client.search_pages("legacy", limit=1, space_key="SPACE")
+def test_get_page_content_requests_body_storage(monkeypatch):
+    captured = {}
 
     assert result["source"] == "v1"
     assert len(result["attempts"]) == 3
@@ -181,6 +225,7 @@ def test_confluence_client_uses_v1_on_on_prem(monkeypatch):
     assert result["results"][0]["space_key"] == "SPACE"
     assert result["results"][0]["url"].endswith("/display/SPACE/Legacy+Page")
 
+    monkeypatch.setattr(requests.Session, "request", fake_request)
 
 def test_compose_v1_cql_query_scopes_space():
     client = ConfluenceClient(
@@ -201,71 +246,79 @@ def test_compose_v1_cql_query_scopes_space():
 def test_confluence_client_reports_error(monkeypatch):
     client = ConfluenceClient(
         {
-            "server_type": "cloud",
-            "subdomain": "example",
-            "username": "user",
-            "token": "token",
+            "server_type": "on_premise",
+            "api_url": "https://confluence.example.com/",
         }
     )
 
-    def fake_post(url, json=None, auth=None, headers=None, verify=None):
-        return DummyResponse(500, {"message": "internal error"}, text="internal error")
+    payload = client.get_page_content("123")
 
-    def fake_get(*args, **kwargs):  # pragma: no cover - defensive fallback
-        raise AssertionError("v1 search should not execute on fatal v2 errors")
+    assert captured["method"] == "GET"
+    assert captured["url"].endswith("/rest/api/content/123")
+    assert captured["params"] == {"expand": "body.storage"}
+    assert payload["body"]["storage"]["value"] == "<p>Body</p>"
 
-    monkeypatch.setattr(requests, "post", fake_post)
-    monkeypatch.setattr(requests, "get", fake_get)
-
-    result = client.search_pages("demo", limit=3)
 
     assert result["source"] == "v2"
     assert result["error"]["message"] == "internal error"
     assert result["error"]["status_code"] == 500
     assert result["message"] == "internal error"
 
-
-def test_tool_invoke_formats_results_and_trace(monkeypatch):
-    tool_instance = ConfluenceSearchPagesTool()
+    recorded = {}
 
     class DummyClient:
         site_url = "https://confluence.example.com/"
 
-        def search_pages(self, query, limit=3, space_key=None):
+        def search_pages(self, query, limit=None, space_key=None):
+            recorded["query"] = query
+            recorded["limit"] = limit
+            recorded["space_key"] = space_key
             return {
                 "results": [
                     {
-                        "id": "789",
-                        "title": "Tool Page",
-                        "url": "https://confluence.example.com/display/SPACE/Tool+Page",
-                        "excerpt": "Tool excerpt",
-                        "last_modified": "2024-01-01T00:00:00.000Z",
-                        "space_key": space_key,
-                    },
-                    {
-                        "id": "000",
-                        "title": "Should be trimmed",
-                        "url": "https://confluence.example.com/display/SPACE/Trimmed",
-                    },
+                        "id": "123",
+                        "title": "Dataiku",
+                        "url_path": "/display/AIEC/Dataiku",
+                        "space_key": "AIEC",
+                    }
                 ],
-                "source": "v2",
-                "attempts": [
-                    {"version": "v2", "status_code": 200},
-                ],
+                "attempts": ["ok"],
+                "source": "confluence",
             }
 
         def get_page_content(self, page_id):
-            return {
-                "body": {
-                    "storage": {
-                        "value": f"<p>Content for {page_id}</p>",
-                    }
-                }
-            }
+            return {"body": {"storage": {"value": "<p>Content</p>"}}}
 
-    tool_instance.client = DummyClient()
+    tool.client = DummyClient()
 
     trace = DummyTrace()
+    response = tool.invoke({"input": {"query": "Dataiku"}}, trace)
+
+    assert recorded == {"query": "Dataiku", "limit": 5, "space_key": "AIEC"}
+    assert len(response["results"]) == 1
+    assert response["results"][0]["page_content"] == "<p>Content</p>"
+    assert trace.outputs["results"][0]["url"].endswith("/display/AIEC/Dataiku")
+
+
+def test_tool_surfaces_error_message(monkeypatch):
+    tool = _load_tool()
+
+    class DummyClient:
+        site_url = "https://confluence.example.com/"
+
+        def search_pages(self, query, limit=None, space_key=None):
+            return {
+                "results": [],
+                "error": {"message": "HTTP 400: cql query parameter is required"},
+                "message": "HTTP 400: cql query parameter is required",
+                "attempts": ["failure"],
+                "source": "confluence",
+            }
+
+    tool.client = DummyClient()
+
+    trace = DummyTrace()
+    response = tool.invoke({"input": {"query": "Dataiku"}}, trace)
 
     result = tool_instance.invoke(
         {"input": {"query": "tool", "space_key": "SPACE", "limit": 1}},
