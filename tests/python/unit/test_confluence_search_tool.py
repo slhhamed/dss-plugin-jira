@@ -170,6 +170,7 @@ def test_confluence_client_builds_expected_cql(monkeypatch):
     assert result["results"][0]["url"].endswith("/display/AIEC/Dataiku")
     assert result["results"][0]["space_key"] == "AIEC"
 
+    monkeypatch.setattr(requests.Session, "request", fake_request)
 
 def test_confluence_client_returns_error_message(monkeypatch):
     def fake_request(self, method, url, params=None, **kwargs):

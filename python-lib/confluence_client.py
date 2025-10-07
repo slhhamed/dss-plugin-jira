@@ -308,12 +308,18 @@ class ConfluenceClient:
             results.append(normalized)
         return results
 
-    def _normalize_entry(self, entry: Dict[str, Any], version: str) -> Dict[str, Any]:
-        content = entry.get("content") if isinstance(entry, dict) else None
-        if not isinstance(content, dict):
-            content = {}
+        try:
+            return response.json() if response.content else {}
+        except ValueError:
+            return {"error": {"message": "Unable to decode Confluence response as JSON."}}
 
-        page_id = str(content.get("id") or entry.get("id") or "")
+    # ------------------------------------------------------------------
+    # Normalisation helpers
+    # ------------------------------------------------------------------
+    def _normalise_result_entry(self, entry: Dict[str, Any]) -> Dict[str, Any]:
+        content = entry.get("content") if isinstance(entry.get("content"), dict) else {}
+
+        page_id = str(entry.get("id") or content.get("id") or "")
         title = content.get("title") or entry.get("title") or "Untitled"
 
         links: Dict[str, Any] = {}
