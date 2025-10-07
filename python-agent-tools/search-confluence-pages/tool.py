@@ -77,7 +77,6 @@ class ConfluenceSearchPagesTool(BaseAgentTool):
 
     def invoke(self, input, trace):
         args = dict(input.get("input", {}))
-        config_defaults = getattr(self, "config", {}) or {}
         query_value = args.get("query", "")
         if isinstance(query_value, str):
             query = query_value.strip()
@@ -85,17 +84,8 @@ class ConfluenceSearchPagesTool(BaseAgentTool):
             query = ""
         else:
             query = str(query_value)
-        if "space_key" in args:
-            space_source = args.get("space_key")
-        else:
-            space_source = config_defaults.get("space_key")
-        space_key = self._normalize_space_key(space_source)
-
-        if "limit" in args:
-            limit_source = args.get("limit")
-        else:
-            limit_source = config_defaults.get("limit", 3)
-        limit_value = self._sanitize_limit(limit_source)
+        space_key = self._normalize_space_key(args.get("space_key"))
+        limit_value = self._sanitize_limit(args.get("limit", 3))
 
         confluence_instance_url = self.client.site_url or ""
         base_url = (
