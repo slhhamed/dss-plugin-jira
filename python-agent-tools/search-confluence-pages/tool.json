@@ -31,6 +31,64 @@
             "optional": true
         },
         {
+            "name": "type",
+            "label": "Content type",
+            "type": "STRING",
+            "description": "Optional Confluence content type filter (e.g. page, blogpost, attachment). Leave empty to search pages only.",
+            "optional": true
+        },
+        {
+            "name": "labels",
+            "label": "Labels",
+            "type": "STRING",
+            "description": "Comma-separated Confluence labels to filter results (e.g. docs,how-to).",
+            "optional": true
+        },
+        {
+            "name": "creator",
+            "label": "Creator",
+            "type": "STRING",
+            "description": "Filter by creator username or account identifier.",
+            "optional": true
+        },
+        {
+            "name": "contributor",
+            "label": "Contributor",
+            "type": "STRING",
+            "description": "Filter by contributor username or account identifier.",
+            "optional": true
+        },
+        {
+            "name": "last_modified",
+            "label": "Last modified",
+            "type": "SELECT",
+            "optional": true,
+            "description": "Limit results to pages updated within the selected timeframe.",
+            "selectChoices": [
+                {"value": "today", "label": "Today"},
+                {"value": "yesterday", "label": "Yesterday"},
+                {"value": "last_week", "label": "Last week"},
+                {"value": "last_4_weeks", "label": "Last 4 weeks"},
+                {"value": "last_3_months", "label": "Last 3 months"},
+                {"value": "last_year", "label": "Last year"}
+            ]
+        },
+        {
+            "name": "order_by",
+            "label": "Order by",
+            "type": "SELECT",
+            "optional": true,
+            "description": "Sort order for results (default: last modified descending).",
+            "selectChoices": [
+                {"value": "lastmodified_desc", "label": "Last modified (newest first)"},
+                {"value": "lastmodified_asc", "label": "Last modified (oldest first)"},
+                {"value": "created_desc", "label": "Created (newest first)"},
+                {"value": "created_asc", "label": "Created (oldest first)"},
+                {"value": "title_asc", "label": "Title (A-Z)"},
+                {"value": "title_desc", "label": "Title (Z-A)"}
+            ]
+        },
+        {
             "name": "limit",
             "label": "Documents limit",
             "type": "STRING",
