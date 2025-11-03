@@ -166,14 +166,48 @@ def test_confluence_client_search_pages_builds_expected_cql(monkeypatch):
     assert captured["params"]["limit"] == 3
     assert (
         captured["params"]["cql"]
-        == 'type=page AND space = "AIEC" AND text ~ "what is Dataiku" ORDER BY lastmodified DESC'
+        == 'type = "page" AND space = "AIEC" AND text ~ "what is Dataiku" ORDER BY lastmodified DESC'
     )
     assert result["attempts"][0] == (
-        'CQL=type=page AND space = "AIEC" AND text ~ "what is Dataiku" ORDER BY lastmodified DESC'
+        'CQL=type = "page" AND space = "AIEC" AND text ~ "what is Dataiku" ORDER BY lastmodified DESC'
     )
     assert result["attempts"][1].startswith("GET")
     assert result["results"][0]["url"].endswith("/display/AIEC/Dataiku")
     assert result["results"][0]["space_key"] == "AIEC"
+
+
+def test_confluence_client_search_pages_applies_filters(monkeypatch):
+    captured = {}
+
+    def fake_request(self, method, url, params=None, **kwargs):
+        captured["params"] = params
+        return DummyResponse(payload={"results": []})
+
+    monkeypatch.setattr(requests.Session, "request", fake_request)
+
+    client = ConfluenceClient({"api_url": "https://confluence.example.com/"})
+
+    client.search_pages(
+        "analytics",
+        limit=10,
+        filters={
+            "type": "blogpost",
+            "labels": ["release", "internal"],
+            "creator": "jsmith",
+            "contributor": "adoe",
+            "last_modified": "last_week",
+            "order_by": "created_asc",
+        },
+    )
+
+    cql = captured["params"]["cql"]
+    assert 'type = "blogpost"' in cql
+    assert 'label = "release"' in cql
+    assert 'label = "internal"' in cql
+    assert 'creator = "jsmith"' in cql
+    assert 'contributor = "adoe"' in cql
+    assert 'lastmodified >= startOfDay(-7d)' in cql
+    assert cql.endswith("ORDER BY created ASC")
 
 
 def test_confluence_client_search_pages_handles_error(monkeypatch):
@@ -250,10 +284,11 @@ def test_tool_invoke_uses_defaults_and_fetches_page_content():
     class DummyClient:
         site_url = "https://confluence.example.com/"
 
-        def search_pages(self, query, limit=None, space_key=None):
+        def search_pages(self, query, limit=None, space_key=None, filters=None):
             recorded["query"] = query
             recorded["limit"] = limit
             recorded["space_key"] = space_key
+            recorded["filters"] = filters
             return {
                 "results": [
                     {
@@ -275,10 +310,16 @@ def test_tool_invoke_uses_defaults_and_fetches_page_content():
     trace = DummyTrace()
     response = tool.invoke({"input": {"query": "Dataiku"}}, trace)
 
-    assert recorded == {"query": "Dataiku", "limit": 5, "space_key": "AIEC"}
+    assert recorded == {
+        "query": "Dataiku",
+        "limit": 5,
+        "space_key": "AIEC",
+        "filters": {"type": "page"},
+    }
     assert len(response["results"]) == 1
     assert response["results"][0]["page_content"] == "<p>Content</p>"
     assert trace.outputs["results"][0]["url"].endswith("/display/AIEC/Dataiku")
+    assert trace.attributes["config"]["filters"] == {"type": "page"}
 
 
 def test_tool_invoke_surfaces_error_message():
@@ -287,7 +328,7 @@ def test_tool_invoke_surfaces_error_message():
     class DummyClient:
         site_url = "https://confluence.example.com/"
 
-        def search_pages(self, query, limit=None, space_key=None):
+        def search_pages(self, query, limit=None, space_key=None, filters=None):
             return {
                 "results": [],
                 "error": {"message": "HTTP 400: cql query parameter is required"},
@@ -315,10 +356,11 @@ def test_tool_invoke_sanitizes_inputs():
     class DummyClient:
         site_url = "https://confluence.example.com/"
 
-        def search_pages(self, query, limit=3, space_key=None):
+        def search_pages(self, query, limit=3, space_key=None, filters=None):
             captured["query"] = query
             captured["limit"] = limit
             captured["space_key"] = space_key
+            captured["filters"] = filters
             return {"results": [], "source": "confluence", "attempts": []}
 
     tool_instance.client = DummyClient()
@@ -326,14 +368,38 @@ def test_tool_invoke_sanitizes_inputs():
     trace = DummyTrace()
 
     result = tool_instance.invoke(
-        {"input": {"query": "  trimmed  ", "space_key": "   ", "limit": "invalid"}},
+        {
+            "input": {
+                "query": "  trimmed  ",
+                "space_key": "   ",
+                "limit": "invalid",
+                "type": "  BLOGPOST  ",
+                "labels": " tag-one , tag-two ",
+                "creator": "  user1  ",
+                "contributor": "   ",
+                "last_modified": "Last_Week",
+                "order_by": "created asc",
+            }
+        },
         trace,
     )
 
-    assert captured == {"query": "trimmed", "limit": 3, "space_key": None}
+    assert captured == {
+        "query": "trimmed",
+        "limit": 3,
+        "space_key": None,
+        "filters": {
+            "type": "blogpost",
+            "labels": ["tag-one", "tag-two"],
+            "creator": "user1",
+            "last_modified": "last_week",
+            "order_by": "created_asc",
+        },
+    }
     assert trace.inputs["query"] == "trimmed"
     assert trace.inputs["limit"] == 3
     assert trace.inputs["space_key"] is None
+    assert trace.attributes["config"]["filters"]["type"] == "blogpost"
     assert trace.outputs["results"] == []
     assert result["results"] == []
     assert result["output"] == "No Confluence pages matched your query."
