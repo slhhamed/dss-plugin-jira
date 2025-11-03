@@ -36,6 +36,46 @@ class ConfluenceSearchPagesTool(BaseAgentTool):
                         "type": "string",
                         "description": "Optional Confluence space key to restrict the search. Leave empty to search all spaces.",
                     },
+                    "type": {
+                        "type": "string",
+                        "description": "Optional Confluence content type filter (e.g. page, blogpost, attachment). Leave empty to search pages only.",
+                    },
+                    "labels": {
+                        "type": "string",
+                        "description": "Comma-separated Confluence labels to filter results (e.g. docs,how-to).",
+                    },
+                    "creator": {
+                        "type": "string",
+                        "description": "Filter by creator username or account identifier.",
+                    },
+                    "contributor": {
+                        "type": "string",
+                        "description": "Filter by contributor username or account identifier.",
+                    },
+                    "last_modified": {
+                        "type": "string",
+                        "enum": [
+                            "today",
+                            "yesterday",
+                            "last_week",
+                            "last_4_weeks",
+                            "last_3_months",
+                            "last_year",
+                        ],
+                        "description": "Limit results to pages updated within the selected timeframe.",
+                    },
+                    "order_by": {
+                        "type": "string",
+                        "enum": [
+                            "lastmodified_desc",
+                            "lastmodified_asc",
+                            "created_desc",
+                            "created_asc",
+                            "title_asc",
+                            "title_desc",
+                        ],
+                        "description": "Sort order for results (default: lastmodified_desc).",
+                    },
                     "limit": {
                         "type": "integer",
                         "description": "Maximum number of results to return (default: 3).",
@@ -64,9 +104,79 @@ class ConfluenceSearchPagesTool(BaseAgentTool):
         text_value = str(space_key).strip()
         return text_value or None
 
+    @staticmethod
+    def _normalize_text(value):
+        if value is None:
+            return None
+        if isinstance(value, str):
+            stripped = value.strip()
+            return stripped or None
+        text = str(value).strip()
+        return text or None
+
+    @staticmethod
+    def _normalize_labels(labels):
+        if labels is None:
+            return []
+        if isinstance(labels, str):
+            raw_items = labels.replace(";", ",").split(",")
+        elif isinstance(labels, (list, tuple, set)):
+            raw_items = labels
+        else:
+            raw_items = [labels]
+
+        normalized = []
+        for item in raw_items:
+            if item is None:
+                continue
+            text = str(item).strip()
+            if text:
+                normalized.append(text)
+        return normalized
+
+    @staticmethod
+    def _normalize_last_modified(value):
+        if value is None:
+            return None
+        text = str(value).strip().lower().replace("-", "_")
+        if not text:
+            return None
+        allowed = {
+            "today",
+            "yesterday",
+            "last_week",
+            "last_4_weeks",
+            "last_3_months",
+            "last_year",
+        }
+        return text if text in allowed else None
+
+    @staticmethod
+    def _normalize_order_by(value):
+        if value is None:
+            return "lastmodified_desc"
+        text = str(value).strip().lower().replace(" ", "_")
+        if not text:
+            return "lastmodified_desc"
+        mapping = {
+            "lastmodified": "lastmodified_desc",
+            "lastmodified_desc": "lastmodified_desc",
+            "lastmodified_asc": "lastmodified_asc",
+            "created": "created_desc",
+            "created_desc": "created_desc",
+            "created_asc": "created_asc",
+            "title": "title_asc",
+            "title_asc": "title_asc",
+            "title_desc": "title_desc",
+        }
+        return mapping.get(text, "lastmodified_desc")
+
     def search_pages(self, query: str, space_key: str = None, limit: int = 3):
         try:
-            return self.client.search_pages(query, limit=limit, space_key=space_key)
+            filters = getattr(self, "_current_filters", {})
+            return self.client.search_pages(
+                query, limit=limit, space_key=space_key, filters=filters
+            )
         except Exception as exception:
             return {
                 "results": [],
@@ -97,6 +207,76 @@ class ConfluenceSearchPagesTool(BaseAgentTool):
             args.get("limit", default_limit), default=default_limit
         )
 
+        filters = {"type": "page"}
+        if isinstance(getattr(self, "config", None), dict):
+            default_type = self._normalize_text(
+                self.config.get("type") or self.config.get("content_type")
+            )
+            if default_type:
+                filters["type"] = default_type.lower()
+
+            default_labels = self._normalize_labels(self.config.get("labels"))
+            if default_labels:
+                filters["labels"] = default_labels
+
+            default_creator = self._normalize_text(self.config.get("creator"))
+            if default_creator:
+                filters["creator"] = default_creator
+
+            default_contributor = self._normalize_text(self.config.get("contributor"))
+            if default_contributor:
+                filters["contributor"] = default_contributor
+
+            default_last_modified = self._normalize_last_modified(
+                self.config.get("last_modified")
+            )
+            if default_last_modified:
+                filters["last_modified"] = default_last_modified
+
+            if "order_by" in self.config:
+                default_order = self._normalize_order_by(self.config.get("order_by"))
+                if default_order:
+                    filters["order_by"] = default_order
+
+        if "type" in args:
+            type_value = self._normalize_text(args.get("type"))
+            filters["type"] = (type_value or "page").lower()
+
+        if "labels" in args:
+            labels_value = self._normalize_labels(args.get("labels"))
+            if labels_value:
+                filters["labels"] = labels_value
+            elif "labels" in filters:
+                filters.pop("labels")
+
+        if "creator" in args:
+            creator_value = self._normalize_text(args.get("creator"))
+            if creator_value:
+                filters["creator"] = creator_value
+            elif "creator" in filters:
+                filters.pop("creator")
+
+        if "contributor" in args:
+            contributor_value = self._normalize_text(args.get("contributor"))
+            if contributor_value:
+                filters["contributor"] = contributor_value
+            elif "contributor" in filters:
+                filters.pop("contributor")
+
+        if "last_modified" in args:
+            last_modified_value = self._normalize_last_modified(args.get("last_modified"))
+            if last_modified_value:
+                filters["last_modified"] = last_modified_value
+            elif "last_modified" in filters:
+                filters.pop("last_modified")
+
+        if "order_by" in args:
+            order_value = self._normalize_order_by(args.get("order_by"))
+            if order_value:
+                filters["order_by"] = order_value
+
+        self._current_filters = filters
+
         confluence_instance_url = self.client.site_url or ""
         base_url = (
             f"{confluence_instance_url.rstrip('/')}/"
@@ -115,6 +295,7 @@ class ConfluenceSearchPagesTool(BaseAgentTool):
             "confluence_instance_url": confluence_instance_url,
             "limit": limit_value,
             "space_key": space_key,
+            "filters": filters,
         }
 
         search_result = self.search_pages(query, space_key, limit_value)
@@ -126,6 +307,7 @@ class ConfluenceSearchPagesTool(BaseAgentTool):
                 "source": search_result.get("source"),
                 "attempts": search_result.get("attempts"),
                 "space_key": space_key,
+                "filters": filters,
             }
 
 

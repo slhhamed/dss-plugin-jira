@@ -1,5 +1,5 @@
 import logging
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, Iterable, List, Optional
 from urllib.parse import urlencode, urljoin
 
 import requests
@@ -80,9 +80,107 @@ class ConfluenceClient:
             return default
         return parsed if parsed > 0 else default
 
+    @staticmethod
+    def _normalize_labels(labels: Any) -> List[str]:
+        if labels is None:
+            return []
+        if isinstance(labels, str):
+            raw_items: Iterable[str] = labels.replace(";", ",").split(",")
+        elif isinstance(labels, Iterable):
+            raw_items = labels  # type: ignore[assignment]
+        else:
+            raw_items = [str(labels)]
+
+        normalized: List[str] = []
+        for item in raw_items:
+            if item is None:
+                continue
+            text = str(item).strip()
+            if text:
+                normalized.append(text)
+        return normalized
+
+    @staticmethod
+    def _normalize_user_reference(value: Any) -> Optional[str]:
+        if value is None:
+            return None
+        if isinstance(value, str):
+            stripped = value.strip()
+            return stripped or None
+        text = str(value).strip()
+        return text or None
+
+    @staticmethod
+    def _normalize_order_by(value: Any) -> str:
+        if value is None:
+            return "lastmodified DESC"
+
+        text = str(value).strip()
+        if not text:
+            return "lastmodified DESC"
+
+        normalized = text.lower().replace("-", "_")
+        shorthand_map = {
+            "last_modified": "lastmodified DESC",
+            "last_modified_desc": "lastmodified DESC",
+            "last_modified_asc": "lastmodified ASC",
+            "lastmodified": "lastmodified DESC",
+            "lastmodified_desc": "lastmodified DESC",
+            "lastmodified_asc": "lastmodified ASC",
+            "created": "created DESC",
+            "created_desc": "created DESC",
+            "created_asc": "created ASC",
+            "title": "title ASC",
+            "title_asc": "title ASC",
+            "title_desc": "title DESC",
+        }
+
+        if normalized in shorthand_map:
+            return shorthand_map[normalized]
+
+        tokens = text.split()
+        if tokens:
+            field = tokens[0].lower()
+            direction = tokens[1].upper() if len(tokens) > 1 else "DESC"
+            if field in {"lastmodified", "created", "title"} and direction in {"ASC", "DESC"}:
+                return f"{field} {direction}"
+
+        return "lastmodified DESC"
+
+    @staticmethod
+    def _normalize_last_modified(value: Any) -> Optional[str]:
+        if value is None:
+            return None
+        text = str(value).strip().lower().replace("-", "_")
+        if not text:
+            return None
+
+        mapping = {
+            "today": "lastmodified >= startOfDay()",
+            "yesterday": "lastmodified >= startOfDay(-1d)",
+            "last_week": "lastmodified >= startOfDay(-7d)",
+            "last_4_weeks": "lastmodified >= startOfDay(-28d)",
+            "last_four_weeks": "lastmodified >= startOfDay(-28d)",
+            "last_month": "lastmodified >= startOfDay(-31d)",
+            "last_3_months": "lastmodified >= startOfDay(-12w)",
+            "last_three_months": "lastmodified >= startOfDay(-12w)",
+            "last_year": "lastmodified >= startOfDay(-52w)",
+            "past_day": "lastmodified >= startOfDay(-1d)",
+            "past_week": "lastmodified >= startOfDay(-7d)",
+            "past_month": "lastmodified >= startOfDay(-31d)",
+        }
+
+        return mapping.get(text)
+
     # ------------------------------- public API --------------------------------
 
-    def search_pages(self, query: str, limit: int = 3, space_key: Optional[str] = None) -> Dict[str, Any]:
+    def search_pages(
+        self,
+        query: str,
+        limit: int = 3,
+        space_key: Optional[str] = None,
+        filters: Optional[Dict[str, Any]] = None,
+    ) -> Dict[str, Any]:
         attempts: List[str] = []
 
         limit_value = self._coerce_positive_int(limit, default=3)
@@ -91,13 +189,47 @@ class ConfluenceClient:
         if qtext.endswith("?"):
             qtext = qtext[:-1].strip()
 
-        cql_parts = ["type=page"]
+        filters = filters or {}
+
+        content_type = filters.get("type")
+        if content_type is None:
+            cql_parts = ["type = \"page\""]
+        else:
+            content_type_text = str(content_type).strip()
+            if not content_type_text:
+                cql_parts = ["type = \"page\""]
+            elif content_type_text.lower() == "page":
+                cql_parts = ["type = \"page\""]
+            else:
+                cql_parts = [f'type = "{self._escape_cql_value(content_type_text)}"']
+
         if space_key := self._normalize_space_key(space_key):
             cql_parts.append(f'space = "{self._escape_cql_value(space_key)}"')
+
+        labels = self._normalize_labels(filters.get("labels"))
+        for label in labels:
+            cql_parts.append(f'label = "{self._escape_cql_value(label)}"')
+
+        creator = self._normalize_user_reference(filters.get("creator"))
+        if creator:
+            cql_parts.append(f'creator = "{self._escape_cql_value(creator)}"')
+
+        contributor = self._normalize_user_reference(filters.get("contributor"))
+        if contributor:
+            cql_parts.append(f'contributor = "{self._escape_cql_value(contributor)}"')
+
+        last_modified_clause = self._normalize_last_modified(filters.get("last_modified"))
+        if last_modified_clause:
+            cql_parts.append(last_modified_clause)
+
         if qtext:
             cql_parts.append(f'text ~ "{self._escape_cql_value(qtext)}"')
 
-        cql = " AND ".join(cql_parts) + " ORDER BY lastmodified DESC"
+        order_by_clause = self._normalize_order_by(filters.get("order_by"))
+
+        cql = " AND ".join(cql_parts)
+        if order_by_clause:
+            cql = f"{cql} ORDER BY {order_by_clause}"
         attempts.append(f"CQL={cql}")
 
         url = f"{self.base_url}/rest/api/search"
