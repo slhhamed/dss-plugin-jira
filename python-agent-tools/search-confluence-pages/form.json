@@ -1,0 +1,39 @@
+{
+    "sections": [
+        {
+            "title": "Connection",
+            "fields": [
+                {"name": "access_type"},
+                {"name": "token_access"}
+            ]
+        },
+        {
+            "title": "Search scope",
+            "fields": [
+                {"name": "space_key"},
+                {"name": "type"},
+                {"name": "labels"}
+            ]
+        },
+        {
+            "title": "People filters",
+            "fields": [
+                {"name": "creator"},
+                {"name": "contributor"}
+            ]
+        },
+        {
+            "title": "Freshness",
+            "fields": [
+                {"name": "last_modified"}
+            ]
+        },
+        {
+            "title": "Ordering & pagination",
+            "fields": [
+                {"name": "order_by"},
+                {"name": "limit"}
+            ]
+        }
+    ]
+}
