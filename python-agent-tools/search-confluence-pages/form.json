@@ -11,7 +11,9 @@
             "title": "Search scope",
             "fields": [
                 {"name": "space_key"},
+                {"name": "search_mode"},
                 {"name": "type"},
+                {"name": "enforce_page_type"},
                 {"name": "labels"}
             ]
         },
@@ -32,7 +34,8 @@
             "title": "Ordering & pagination",
             "fields": [
                 {"name": "order_by"},
-                {"name": "limit"}
+                {"name": "limit"},
+                {"name": "include_debug_metadata"}
             ]
         }
     ]

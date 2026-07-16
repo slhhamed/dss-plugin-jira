@@ -38,6 +38,26 @@
             "optional": true
         },
         {
+            "name": "search_mode",
+            "label": "Search mode",
+            "type": "SELECT",
+            "description": "strict_page keeps page-only default behavior; broad does not force type=page unless type is explicitly provided.",
+            "defaultValue": "strict_page",
+            "optional": true,
+            "selectChoices": [
+                {"value": "strict_page", "label": "Strict page mode (default)"},
+                {"value": "broad", "label": "Broad mode"}
+            ]
+        },
+        {
+            "name": "enforce_page_type",
+            "label": "Restrict to page type by default",
+            "type": "BOOLEAN",
+            "description": "When enabled (default), the search uses type=page unless a type is explicitly provided.",
+            "defaultValue": true,
+            "optional": true
+        },
+        {
             "name": "labels",
             "label": "Labels",
             "type": "STRING",
@@ -94,6 +114,14 @@
             "type": "STRING",
             "description": "Maximum number of Confluence pages to return (default: 3).",
             "defaultValue": "3",
+            "optional": true
+        },
+        {
+            "name": "include_debug_metadata",
+            "label": "Include debug metadata in tool output",
+            "type": "BOOLEAN",
+            "description": "When enabled, output includes effective CQL and request attempts to help compare tool behavior with manual search.",
+            "defaultValue": false,
             "optional": true
         }
     ]

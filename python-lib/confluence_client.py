@@ -1,6 +1,6 @@
 import logging
 from typing import Any, Dict, Iterable, List, Optional
-from urllib.parse import urlencode, urljoin
+from urllib.parse import urlencode, urljoin, urlparse, urlunparse
 
 import requests
 
@@ -16,12 +16,9 @@ class ConfluenceClient:
 
         self.server_type = connection_details.get("server_type", "cloud")
         subdomain = connection_details.get("subdomain")
-        api_url = (connection_details.get("api_url") or "").rstrip("/")
+        api_url = connection_details.get("api_url") or ""
 
-        if self.server_type == "cloud" and subdomain:
-            base_url = f"https://{subdomain}.atlassian.net/wiki"
-        else:
-            base_url = api_url
+        base_url = self._derive_base_url(self.server_type, subdomain, api_url)
 
         self.base_url = base_url.rstrip("/")
         self.site_url = f"{self.base_url}/" if self.base_url else ""
@@ -40,6 +37,53 @@ class ConfluenceClient:
             self.session.auth = (username, password or token)
         elif token:
             self.session.headers.update({"Authorization": f"Bearer {token}"})
+
+    @staticmethod
+    def _derive_base_url(server_type: str, subdomain: Optional[str], api_url: str) -> str:
+        api_url = str(api_url or "").strip()
+        if api_url:
+            parsed = urlparse(api_url)
+            if parsed.scheme and parsed.netloc:
+                # For Atlassian cloud links, canonicalize to host/wiki root.
+                if parsed.netloc.endswith("atlassian.net"):
+                    return f"{parsed.scheme}://{parsed.netloc}/wiki"
+                if server_type == "cloud" and "/wiki" in (parsed.path or ""):
+                    return urlunparse((parsed.scheme, parsed.netloc, "/wiki", "", "", ""))
+                return urlunparse((parsed.scheme, parsed.netloc, parsed.path.rstrip("/"), "", "", ""))
+            return api_url.rstrip("/")
+
+        if server_type == "cloud" and subdomain:
+            return f"https://{subdomain}.atlassian.net/wiki"
+
+        return ""
+
+    def _origin_url(self) -> str:
+        parsed = urlparse(self.base_url)
+        if parsed.scheme and parsed.netloc:
+            return f"{parsed.scheme}://{parsed.netloc}"
+        return ""
+
+    def build_absolute_url(self, link_path: Any) -> Optional[str]:
+        if not isinstance(link_path, str) or not link_path:
+            return None
+        if link_path.startswith("http://") or link_path.startswith("https://"):
+            return link_path
+
+        origin = self._origin_url()
+        if not origin:
+            return None
+
+        # Atlassian cloud often returns /spaces/... or /wiki/... paths.
+        if self.base_url.endswith("atlassian.net/wiki") or self.base_url.endswith("atlassian.net/wiki/"):
+            if link_path.startswith("/wiki/"):
+                return f"{origin}{link_path}"
+            if link_path.startswith("/"):
+                return f"{origin}/wiki{link_path}"
+            return f"{origin}/wiki/{link_path.lstrip('/')}"
+
+        if link_path.startswith("/"):
+            return f"{origin}{link_path}"
+        return urljoin(self.site_url, link_path)
 
     # ---------------------------- internal helpers ----------------------------
 
@@ -189,15 +233,24 @@ class ConfluenceClient:
         if qtext.endswith("?"):
             qtext = qtext[:-1].strip()
 
-        filters = filters or {}
+        filters = dict(filters or {})
+
+        search_mode_raw = filters.get("search_mode")
+        search_mode = None
+        if search_mode_raw is not None:
+            normalized_mode = str(search_mode_raw).strip().lower().replace("-", "_")
+            if normalized_mode in {"strict_page", "strict"}:
+                search_mode = "strict_page"
+            elif normalized_mode in {"broad", "all"}:
+                search_mode = "broad"
 
         content_type = filters.get("type")
         if content_type is None:
-            cql_parts = ["type = \"page\""]
+            cql_parts = [] if search_mode == "broad" else ["type = \"page\""]
         else:
             content_type_text = str(content_type).strip()
             if not content_type_text:
-                cql_parts = ["type = \"page\""]
+                cql_parts = [] if search_mode == "broad" else ["type = \"page\""]
             elif content_type_text.lower() == "page":
                 cql_parts = ["type = \"page\""]
             else:
@@ -226,6 +279,9 @@ class ConfluenceClient:
             cql_parts.append(f'text ~ "{self._escape_cql_value(qtext)}"')
 
         order_by_clause = self._normalize_order_by(filters.get("order_by"))
+
+        if not cql_parts:
+            cql_parts = ["type = \"page\""]
 
         cql = " AND ".join(cql_parts)
         if order_by_clause:
@@ -306,11 +362,7 @@ class ConfluenceClient:
             or entry.get("url")
         )
 
-        absolute_url = None
-        if isinstance(link_path, str) and link_path.startswith("http"):
-            absolute_url = link_path
-        elif isinstance(link_path, str) and self.site_url:
-            absolute_url = urljoin(self.site_url, link_path.lstrip("/"))
+        absolute_url = self.build_absolute_url(link_path)
 
         excerpt = entry.get("excerpt") or entry.get("excerptText") or content.get("excerpt")
         last_modified = (

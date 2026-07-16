@@ -403,3 +403,46 @@ def test_tool_invoke_sanitizes_inputs():
     assert trace.outputs["results"] == []
     assert result["results"] == []
     assert result["output"] == "No Confluence pages matched your query."
+
+
+def test_confluence_client_cloud_url_is_canonicalized_to_wiki_root():
+    client = ConfluenceClient(
+        {
+            "server_type": "cloud",
+            "api_url": "https://kpn.atlassian.net/wiki/spaces/AIEC/pages/109159581/GenAI+Gateway+Models",
+            "username": "user@example.com",
+            "token": "token",
+        }
+    )
+
+    assert client.base_url == "https://kpn.atlassian.net/wiki"
+    assert client.build_absolute_url("/spaces/AIEC/pages/109159581/GenAI+Gateway+Models") == (
+        "https://kpn.atlassian.net/wiki/spaces/AIEC/pages/109159581/GenAI+Gateway+Models"
+    )
+
+
+def test_tool_invoke_can_disable_default_page_filter():
+    tool_instance = ConfluenceSearchPagesTool()
+    tool_instance.config = {"enforce_page_type": False}
+
+    captured = {}
+
+    class DummyClient:
+        site_url = "https://kpn.atlassian.net/wiki/"
+
+        def search_pages(self, query, limit=3, space_key=None, filters=None):
+            captured["query"] = query
+            captured["limit"] = limit
+            captured["space_key"] = space_key
+            captured["filters"] = filters
+            return {"results": [], "source": "confluence", "attempts": []}
+
+    tool_instance.client = DummyClient()
+
+    trace = DummyTrace()
+    result = tool_instance.invoke({"input": {"query": "model governance"}}, trace)
+
+    assert captured["filters"] == {}
+    assert trace.attributes["config"]["enforce_page_type"] is False
+    assert result["results"] == []
+    assert result["output"] == "No Confluence pages matched your query."

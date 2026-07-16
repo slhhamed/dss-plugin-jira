@@ -40,6 +40,15 @@ class ConfluenceSearchPagesTool(BaseAgentTool):
                         "type": "string",
                         "description": "Optional Confluence content type filter (e.g. page, blogpost, attachment). Leave empty to search pages only.",
                     },
+                    "search_mode": {
+                        "type": "string",
+                        "enum": ["strict_page", "broad"],
+                        "description": "strict_page keeps page-only default behavior; broad does not force type=page unless type is explicitly provided.",
+                    },
+                    "enforce_page_type": {
+                        "type": "boolean",
+                        "description": "Legacy override for page-only default behavior. true maps to strict_page, false maps to broad.",
+                    },
                     "labels": {
                         "type": "string",
                         "description": "Comma-separated Confluence labels to filter results (e.g. docs,how-to).",
@@ -82,6 +91,11 @@ class ConfluenceSearchPagesTool(BaseAgentTool):
                         "minimum": 1,
                         "default": 3,
                     },
+                    "include_debug_metadata": {
+                        "type": "boolean",
+                        "description": "When true, include effective CQL and request attempts in tool output for troubleshooting.",
+                        "default": False,
+                    },
                 },
                 "required": ["query"],
             },
@@ -94,6 +108,19 @@ class ConfluenceSearchPagesTool(BaseAgentTool):
         except (TypeError, ValueError):
             return default
         return limit_value if limit_value > 0 else default
+
+    @staticmethod
+    def _coerce_bool(value, default: bool = True) -> bool:
+        if value is None:
+            return default
+        if isinstance(value, bool):
+            return value
+        text = str(value).strip().lower()
+        if text in {"1", "true", "yes", "on"}:
+            return True
+        if text in {"0", "false", "no", "off"}:
+            return False
+        return default
 
     def _normalize_space_key(self, space_key):
         if isinstance(space_key, str):
@@ -171,6 +198,17 @@ class ConfluenceSearchPagesTool(BaseAgentTool):
         }
         return mapping.get(text, "lastmodified_desc")
 
+    @staticmethod
+    def _normalize_search_mode(value):
+        if value is None:
+            return None
+        text = str(value).strip().lower().replace("-", "_")
+        if text in {"strict_page", "strict"}:
+            return "strict_page"
+        if text in {"broad", "all"}:
+            return "broad"
+        return None
+
     def search_pages(self, query: str, space_key: str = None, limit: int = 3):
         try:
             filters = getattr(self, "_current_filters", {})
@@ -206,9 +244,33 @@ class ConfluenceSearchPagesTool(BaseAgentTool):
         limit_value = self._sanitize_limit(
             args.get("limit", default_limit), default=default_limit
         )
-
-        filters = {"type": "page"}
+        include_debug_metadata = False
         if isinstance(getattr(self, "config", None), dict):
+            include_debug_metadata = self._coerce_bool(
+                self.config.get("include_debug_metadata", False), default=False
+            )
+        if "include_debug_metadata" in args:
+            include_debug_metadata = self._coerce_bool(
+                args.get("include_debug_metadata"), default=include_debug_metadata
+            )
+
+        enforce_page_type = True
+        search_mode = None
+        filters = {}
+        if isinstance(getattr(self, "config", None), dict):
+            search_mode = self._normalize_search_mode(self.config.get("search_mode"))
+            enforce_page_type = self._coerce_bool(
+                self.config.get("enforce_page_type", True), default=True
+            )
+
+            if search_mode == "strict_page":
+                enforce_page_type = True
+            elif search_mode == "broad":
+                enforce_page_type = False
+
+            if enforce_page_type:
+                filters["type"] = "page"
+
             default_type = self._normalize_text(
                 self.config.get("type") or self.config.get("content_type")
             )
@@ -238,9 +300,35 @@ class ConfluenceSearchPagesTool(BaseAgentTool):
                 if default_order:
                     filters["order_by"] = default_order
 
+        runtime_search_mode = self._normalize_search_mode(args.get("search_mode"))
+        if runtime_search_mode is not None:
+            search_mode = runtime_search_mode
+            if search_mode == "strict_page":
+                enforce_page_type = True
+            elif search_mode == "broad":
+                enforce_page_type = False
+
+            if enforce_page_type and "type" not in filters:
+                filters["type"] = "page"
+            if not enforce_page_type and "type" not in args and filters.get("type") == "page":
+                filters.pop("type", None)
+
+        if "enforce_page_type" in args:
+            enforce_page_type = self._coerce_bool(args.get("enforce_page_type"), default=enforce_page_type)
+            search_mode = "strict_page" if enforce_page_type else "broad"
+            if enforce_page_type and "type" not in filters:
+                filters["type"] = "page"
+            if not enforce_page_type and "type" not in args and filters.get("type") == "page":
+                filters.pop("type", None)
+
         if "type" in args:
             type_value = self._normalize_text(args.get("type"))
-            filters["type"] = (type_value or "page").lower()
+            if type_value:
+                filters["type"] = type_value.lower()
+            elif enforce_page_type:
+                filters["type"] = "page"
+            else:
+                filters.pop("type", None)
 
         if "labels" in args:
             labels_value = self._normalize_labels(args.get("labels"))
@@ -275,6 +363,10 @@ class ConfluenceSearchPagesTool(BaseAgentTool):
             if order_value:
                 filters["order_by"] = order_value
 
+        if search_mode is None:
+            search_mode = "strict_page" if enforce_page_type else "broad"
+        filters["search_mode"] = search_mode
+
         self._current_filters = filters
 
         confluence_instance_url = self.client.site_url or ""
@@ -296,6 +388,9 @@ class ConfluenceSearchPagesTool(BaseAgentTool):
             "limit": limit_value,
             "space_key": space_key,
             "filters": filters,
+            "enforce_page_type": enforce_page_type,
+            "search_mode": search_mode,
+            "include_debug_metadata": include_debug_metadata,
         }
 
         search_result = self.search_pages(query, space_key, limit_value)
@@ -303,12 +398,24 @@ class ConfluenceSearchPagesTool(BaseAgentTool):
         raw_results = []
         if isinstance(search_result, dict):
             raw_results = search_result.get("results") or []
+            attempts = search_result.get("attempts", [])
+            effective_cql = None
+            request_preview_url = None
+            if attempts and isinstance(attempts[0], str) and attempts[0].startswith("CQL="):
+                effective_cql = attempts[0][4:]
+            if len(attempts) > 1 and isinstance(attempts[1], str) and attempts[1].startswith("GET "):
+                request_preview_url = attempts[1][4:]
             trace.attributes["search"] = {
                 "source": search_result.get("source"),
-                "attempts": search_result.get("attempts"),
+                "attempts": attempts,
                 "space_key": space_key,
                 "filters": filters,
+                "effective_cql": effective_cql,
+                "request_preview_url": request_preview_url,
             }
+            trace.outputs["search_attempts"] = attempts
+            trace.outputs["effective_cql"] = effective_cql
+            trace.outputs["request_preview_url"] = request_preview_url
 
 
         if isinstance(search_result, dict) and raw_results:
@@ -321,13 +428,10 @@ class ConfluenceSearchPagesTool(BaseAgentTool):
                 if not link:
                     link_path = item.get("url_path")
                     if link_path:
-                        if base_url:
-                            normalized_path = (
-                                link_path.lstrip("/")
-                                if isinstance(link_path, str) and link_path.startswith("/")
-                                else link_path
-                            )
-                            link = urljoin(base_url, normalized_path)
+                        if hasattr(self.client, "build_absolute_url"):
+                            link = self.client.build_absolute_url(link_path)
+                        elif base_url:
+                            link = urljoin(base_url, link_path)
                         else:
                             link = link_path
                     elif page_id and base_url:
@@ -368,12 +472,20 @@ class ConfluenceSearchPagesTool(BaseAgentTool):
                 if page_id:
                     item_output["page_id"] = page_id
 
-                if link:
-                    items.append(item_output)
+                items.append(item_output)
             output_data = items if items else []
             output_text = json.dumps(output_data)
             trace.outputs["results"] = output_data
-            return {"output": output_text, "results": output_data}
+            response = {"output": output_text, "results": output_data}
+            if include_debug_metadata:
+                response["debug"] = {
+                    "attempts": search_result.get("attempts", []),
+                    "effective_cql": trace.outputs.get("effective_cql"),
+                    "request_preview_url": trace.outputs.get("request_preview_url"),
+                    "effective_filters": filters,
+                    "search_mode": search_mode,
+                }
+            return response
 
         if isinstance(search_result, dict):
             message = search_result.get("message")
@@ -385,7 +497,16 @@ class ConfluenceSearchPagesTool(BaseAgentTool):
             output_message = message or "No Confluence pages matched your query."
             trace.outputs["message"] = output_message
             trace.outputs["results"] = []
-            return {"output": output_message, "results": []}
+            response = {"output": output_message, "results": []}
+            if include_debug_metadata:
+                response["debug"] = {
+                    "attempts": attempts,
+                    "effective_cql": trace.outputs.get("effective_cql"),
+                    "request_preview_url": trace.outputs.get("request_preview_url"),
+                    "effective_filters": filters,
+                    "search_mode": search_mode,
+                }
+            return response
         else:
             message = None
             if isinstance(search_result, dict):
@@ -395,5 +516,13 @@ class ConfluenceSearchPagesTool(BaseAgentTool):
             }
 
         trace.outputs["results"] = output_data
-
-        return {"output": json.dumps(output_data), "results": output_data}
+        response = {"output": json.dumps(output_data), "results": output_data}
+        if include_debug_metadata:
+            response["debug"] = {
+                "attempts": [],
+                "effective_cql": trace.outputs.get("effective_cql"),
+                "request_preview_url": trace.outputs.get("request_preview_url"),
+                "effective_filters": filters,
+                "search_mode": search_mode,
+            }
+        return response
