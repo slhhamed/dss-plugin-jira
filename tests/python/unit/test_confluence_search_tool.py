@@ -314,7 +314,7 @@ def test_tool_invoke_uses_defaults_and_fetches_page_content():
         "query": "Dataiku",
         "limit": 5,
         "space_key": "AIEC",
-        "filters": {"type": "page"},
+        "filters": {"type": "page", "search_mode": "strict_page"},
     }
     assert len(response["results"]) == 1
     assert response["results"][0]["page_content"] == "<p>Content</p>"
@@ -442,7 +442,7 @@ def test_tool_invoke_can_disable_default_page_filter():
     trace = DummyTrace()
     result = tool_instance.invoke({"input": {"query": "model governance"}}, trace)
 
-    assert captured["filters"] == {}
+    assert captured["filters"] == {"search_mode": "broad"}
     assert trace.attributes["config"]["enforce_page_type"] is False
     assert result["results"] == []
     assert result["output"] == "No Confluence pages matched your query."

@@ -50,6 +50,27 @@
             ]
         },
         {
+            "name": "query_semantics",
+            "label": "Query semantics",
+            "type": "SELECT",
+            "description": "How keyword text is translated into CQL text clauses.",
+            "defaultValue": "auto",
+            "optional": true,
+            "selectChoices": [
+                {"value": "auto", "label": "Auto (phrase -> AND -> OR)"},
+                {"value": "phrase", "label": "Phrase"},
+                {"value": "terms_and", "label": "Terms AND"},
+                {"value": "terms_or", "label": "Terms OR"}
+            ]
+        },
+        {
+            "name": "min_results_threshold",
+            "label": "Minimum results threshold",
+            "type": "STRING",
+            "description": "Minimum result count to stop auto query fallback (default: min(limit, 3)).",
+            "optional": true
+        },
+        {
             "name": "enforce_page_type",
             "label": "Restrict to page type by default",
             "type": "BOOLEAN",

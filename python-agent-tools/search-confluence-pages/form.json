@@ -12,8 +12,10 @@
             "fields": [
                 {"name": "space_key"},
                 {"name": "search_mode"},
+                {"name": "query_semantics"},
                 {"name": "type"},
                 {"name": "enforce_page_type"},
+                {"name": "min_results_threshold"},
                 {"name": "labels"}
             ]
         },

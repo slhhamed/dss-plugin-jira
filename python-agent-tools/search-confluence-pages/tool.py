@@ -45,6 +45,16 @@ class ConfluenceSearchPagesTool(BaseAgentTool):
                         "enum": ["strict_page", "broad"],
                         "description": "strict_page keeps page-only default behavior; broad does not force type=page unless type is explicitly provided.",
                     },
+                    "query_semantics": {
+                        "type": "string",
+                        "enum": ["phrase", "terms_and", "terms_or", "auto"],
+                        "description": "Controls how keyword text is translated into CQL text clauses.",
+                    },
+                    "min_results_threshold": {
+                        "type": "integer",
+                        "description": "Minimum number of results to stop auto query fallback (default: min(limit, 3)).",
+                        "minimum": 1,
+                    },
                     "enforce_page_type": {
                         "type": "boolean",
                         "description": "Legacy override for page-only default behavior. true maps to strict_page, false maps to broad.",
@@ -209,6 +219,14 @@ class ConfluenceSearchPagesTool(BaseAgentTool):
             return "broad"
         return None
 
+    @staticmethod
+    def _normalize_query_semantics(value):
+        if value is None:
+            return None
+        text = str(value).strip().lower().replace("-", "_")
+        allowed = {"phrase", "terms_and", "terms_or", "auto"}
+        return text if text in allowed else None
+
     def search_pages(self, query: str, space_key: str = None, limit: int = 3):
         try:
             filters = getattr(self, "_current_filters", {})
@@ -253,6 +271,23 @@ class ConfluenceSearchPagesTool(BaseAgentTool):
             include_debug_metadata = self._coerce_bool(
                 args.get("include_debug_metadata"), default=include_debug_metadata
             )
+
+        query_semantics = None
+        min_results_threshold = None
+        if isinstance(getattr(self, "config", None), dict):
+            query_semantics = self._normalize_query_semantics(
+                self.config.get("query_semantics")
+            )
+            configured_threshold = self.config.get("min_results_threshold")
+            if configured_threshold is not None:
+                min_results_threshold = self._sanitize_limit(configured_threshold, default=1)
+
+        runtime_query_semantics = self._normalize_query_semantics(args.get("query_semantics"))
+        if runtime_query_semantics is not None:
+            query_semantics = runtime_query_semantics
+
+        if "min_results_threshold" in args and args.get("min_results_threshold") is not None:
+            min_results_threshold = self._sanitize_limit(args.get("min_results_threshold"), default=1)
 
         enforce_page_type = True
         search_mode = None
@@ -366,6 +401,10 @@ class ConfluenceSearchPagesTool(BaseAgentTool):
         if search_mode is None:
             search_mode = "strict_page" if enforce_page_type else "broad"
         filters["search_mode"] = search_mode
+        if query_semantics:
+            filters["query_semantics"] = query_semantics
+        if min_results_threshold is not None:
+            filters["min_results_threshold"] = min_results_threshold
 
         self._current_filters = filters
 
@@ -390,6 +429,8 @@ class ConfluenceSearchPagesTool(BaseAgentTool):
             "filters": filters,
             "enforce_page_type": enforce_page_type,
             "search_mode": search_mode,
+            "query_semantics": query_semantics,
+            "min_results_threshold": min_results_threshold,
             "include_debug_metadata": include_debug_metadata,
         }
 

@@ -1,4 +1,5 @@
 import logging
+import re
 from typing import Any, Dict, Iterable, List, Optional
 from urllib.parse import urlencode, urljoin, urlparse, urlunparse
 
@@ -105,6 +106,59 @@ class ConfluenceClient:
         if query is None:
             return ""
         return query.strip() if isinstance(query, str) else str(query).strip()
+
+    @staticmethod
+    def _normalize_query_semantics(value: Any) -> str:
+        if value is None:
+            return "phrase"
+        text = str(value).strip().lower().replace("-", "_")
+        allowed = {"phrase", "terms_and", "terms_or", "auto"}
+        return text if text in allowed else "phrase"
+
+    @staticmethod
+    def _tokenize_query_terms(query_text: str) -> List[str]:
+        tokens = [token for token in re.findall(r"[A-Za-z0-9]+", query_text) if token]
+        if tokens:
+            return tokens
+        fallback = [token for token in query_text.split() if token]
+        return fallback
+
+    def _build_query_clause_variants(self, query_text: str, query_semantics: str) -> List[Dict[str, Optional[str]]]:
+        if not query_text:
+            return [{"label": "none", "clause": None}]
+
+        escaped_phrase = self._escape_cql_value(query_text)
+        tokens = self._tokenize_query_terms(query_text)
+        escaped_tokens = [self._escape_cql_value(token) for token in tokens]
+
+        variants: List[Dict[str, Optional[str]]] = []
+
+        phrase_clause = f'text ~ "{escaped_phrase}"'
+        variants.append({"label": "phrase", "clause": phrase_clause})
+
+        if len(escaped_tokens) >= 2:
+            and_clause = f'text ~ "{" AND ".join(escaped_tokens)}"'
+            or_clause = f'text ~ "{" OR ".join(escaped_tokens)}"'
+            variants.append({"label": "terms_and", "clause": and_clause})
+            variants.append({"label": "terms_or", "clause": or_clause})
+
+        if query_semantics == "auto":
+            ordered_labels = ["phrase", "terms_and", "terms_or"]
+        else:
+            ordered_labels = [query_semantics]
+
+        filtered: List[Dict[str, Optional[str]]] = []
+        seen = set()
+        for label in ordered_labels:
+            for variant in variants:
+                if variant["label"] == label and variant["clause"] and variant["clause"] not in seen:
+                    filtered.append(variant)
+                    seen.add(variant["clause"])
+
+        if not filtered:
+            filtered = [{"label": "phrase", "clause": phrase_clause}]
+
+        return filtered
 
     @staticmethod
     def _normalize_space_key(space_key: Optional[str]) -> Optional[str]:
@@ -246,89 +300,114 @@ class ConfluenceClient:
 
         content_type = filters.get("type")
         if content_type is None:
-            cql_parts = [] if search_mode == "broad" else ["type = \"page\""]
+            base_cql_parts = [] if search_mode == "broad" else ["type = \"page\""]
         else:
             content_type_text = str(content_type).strip()
             if not content_type_text:
-                cql_parts = [] if search_mode == "broad" else ["type = \"page\""]
+                base_cql_parts = [] if search_mode == "broad" else ["type = \"page\""]
             elif content_type_text.lower() == "page":
-                cql_parts = ["type = \"page\""]
+                base_cql_parts = ["type = \"page\""]
             else:
-                cql_parts = [f'type = "{self._escape_cql_value(content_type_text)}"']
+                base_cql_parts = [f'type = "{self._escape_cql_value(content_type_text)}"']
 
         if space_key := self._normalize_space_key(space_key):
-            cql_parts.append(f'space = "{self._escape_cql_value(space_key)}"')
+            base_cql_parts.append(f'space = "{self._escape_cql_value(space_key)}"')
 
         labels = self._normalize_labels(filters.get("labels"))
         for label in labels:
-            cql_parts.append(f'label = "{self._escape_cql_value(label)}"')
+            base_cql_parts.append(f'label = "{self._escape_cql_value(label)}"')
 
         creator = self._normalize_user_reference(filters.get("creator"))
         if creator:
-            cql_parts.append(f'creator = "{self._escape_cql_value(creator)}"')
+            base_cql_parts.append(f'creator = "{self._escape_cql_value(creator)}"')
 
         contributor = self._normalize_user_reference(filters.get("contributor"))
         if contributor:
-            cql_parts.append(f'contributor = "{self._escape_cql_value(contributor)}"')
+            base_cql_parts.append(f'contributor = "{self._escape_cql_value(contributor)}"')
 
         last_modified_clause = self._normalize_last_modified(filters.get("last_modified"))
         if last_modified_clause:
-            cql_parts.append(last_modified_clause)
-
-        if qtext:
-            cql_parts.append(f'text ~ "{self._escape_cql_value(qtext)}"')
+            base_cql_parts.append(last_modified_clause)
 
         order_by_clause = self._normalize_order_by(filters.get("order_by"))
+        query_semantics = self._normalize_query_semantics(filters.get("query_semantics"))
+        min_results_threshold = self._coerce_positive_int(
+            filters.get("min_results_threshold"), default=min(limit_value, 3)
+        )
 
-        if not cql_parts:
-            cql_parts = ["type = \"page\""]
-
-        cql = " AND ".join(cql_parts)
-        if order_by_clause:
-            cql = f"{cql} ORDER BY {order_by_clause}"
-        attempts.append(f"CQL={cql}")
-
+        query_variants = self._build_query_clause_variants(qtext, query_semantics)
         url = f"{self.base_url}/rest/api/search"
-        params = {"cql": cql, "limit": limit_value}
-        attempts.append(f"GET {url}?{urlencode(params)}")
 
-        try:
-            resp = self._request("GET", url, params=params)
-        except requests.RequestException as exc:
-            message = f"Request failed: {exc}"
+        deduped: List[Dict[str, Any]] = []
+        seen_keys = set()
+        last_error_message = None
+
+        for index, variant in enumerate(query_variants):
+            cql_parts = list(base_cql_parts)
+            query_clause = variant.get("clause")
+            label = variant.get("label", "query")
+            if query_clause:
+                cql_parts.append(query_clause)
+
+            if not cql_parts:
+                cql_parts = ["type = \"page\""]
+
+            cql = " AND ".join(cql_parts)
+            if order_by_clause:
+                cql = f"{cql} ORDER BY {order_by_clause}"
+
+            cql_entry = f"CQL={cql}" if index == 0 else f"CQL[{label}]={cql}"
+            attempts.append(cql_entry)
+
+            params = {"cql": cql, "limit": limit_value}
+            get_entry = f"GET {url}?{urlencode(params)}" if index == 0 else f"GET[{label}] {url}?{urlencode(params)}"
+            attempts.append(get_entry)
+
+            try:
+                resp = self._request("GET", url, params=params)
+            except requests.RequestException as exc:
+                last_error_message = f"Request failed: {exc}"
+                attempts.append(f"ERROR[{label}]={last_error_message}")
+                continue
+
+            if not resp.ok:
+                last_error_message = self._build_error_message(resp)
+                attempts.append(f"ERROR[{label}]={last_error_message}")
+                continue
+
+            try:
+                payload = resp.json() if resp.content else {}
+            except ValueError:
+                last_error_message = "Unable to decode Confluence response as JSON."
+                attempts.append(f"ERROR[{label}]={last_error_message}")
+                continue
+
+            raw_items = payload.get("results") or []
+            for entry in raw_items:
+                normalized = self._normalise_result_entry(entry)
+                key = normalized.get("id") or normalized.get("url") or normalized.get("title")
+                key = key or f"row-{len(deduped)}"
+                if key in seen_keys:
+                    continue
+                seen_keys.add(key)
+                deduped.append(normalized)
+
+            if len(deduped) >= min_results_threshold:
+                break
+
+        if deduped:
+            return {"results": deduped[:limit_value], "source": "confluence", "attempts": attempts}
+
+        if last_error_message:
             return {
                 "results": [],
-                "error": {"message": message},
+                "error": {"message": last_error_message},
                 "source": "confluence",
                 "attempts": attempts,
-                "message": message,
+                "message": last_error_message,
             }
 
-        if not resp.ok:
-            message = self._build_error_message(resp)
-            return {
-                "results": [],
-                "error": {"message": message},
-                "source": "confluence",
-                "attempts": attempts,
-                "message": message,
-            }
-
-        try:
-            payload = resp.json() if resp.content else {}
-        except ValueError:
-            message = "Unable to decode Confluence response as JSON."
-            return {
-                "results": [],
-                "error": {"message": message},
-                "source": "confluence",
-                "attempts": attempts,
-                "message": message,
-            }
-
-        raw_items = payload.get("results") or []
-        results = [self._normalise_result_entry(entry) for entry in raw_items]
-        return {"results": results[:limit_value], "source": "confluence", "attempts": attempts}
+        return {"results": [], "source": "confluence", "attempts": attempts}
 
     def get_page_content(self, page_id: str) -> Dict[str, Any]:
         url = f"{self.base_url}/rest/api/content/{page_id}"
