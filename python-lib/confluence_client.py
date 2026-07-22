@@ -171,6 +171,36 @@ class ConfluenceClient:
         return text or None
 
     @staticmethod
+    def _normalize_space_keys(space_keys: Any) -> List[str]:
+        if space_keys is None:
+            return []
+
+        if isinstance(space_keys, str):
+            raw_items: Iterable[Any] = space_keys.replace(";", ",").split(",")
+        elif isinstance(space_keys, Iterable):
+            raw_items = space_keys
+        else:
+            raw_items = [space_keys]
+
+        normalized: List[str] = []
+        seen = set()
+        for item in raw_items:
+            if item is None:
+                continue
+            if isinstance(item, str):
+                candidates = item.replace(";", ",").split(",")
+            else:
+                candidates = [str(item)]
+
+            for candidate in candidates:
+                text = str(candidate).strip()
+                if text and text not in seen:
+                    seen.add(text)
+                    normalized.append(text)
+
+        return normalized
+
+    @staticmethod
     def _coerce_positive_int(value: Any, default: int = 3) -> int:
         try:
             parsed = int(value)
@@ -310,8 +340,12 @@ class ConfluenceClient:
             else:
                 base_cql_parts = [f'type = "{self._escape_cql_value(content_type_text)}"']
 
-        if space_key := self._normalize_space_key(space_key):
-            base_cql_parts.append(f'space = "{self._escape_cql_value(space_key)}"')
+        space_keys = self._normalize_space_keys(space_key)
+        if len(space_keys) == 1:
+            base_cql_parts.append(f'space = "{self._escape_cql_value(space_keys[0])}"')
+        elif len(space_keys) > 1:
+            space_clauses = [f'space = "{self._escape_cql_value(key)}"' for key in space_keys]
+            base_cql_parts.append(f'({" OR ".join(space_clauses)})')
 
         labels = self._normalize_labels(filters.get("labels"))
         for label in labels:

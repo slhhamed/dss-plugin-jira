@@ -34,7 +34,7 @@ class ConfluenceSearchPagesTool(BaseAgentTool):
                     },
                     "space_key": {
                         "type": "string",
-                        "description": "Optional Confluence space key to restrict the search. Leave empty to search all spaces.",
+                        "description": "Optional Confluence space key(s) to restrict the search. Supports comma-separated keys (semicolon also accepted). Leave empty to search all spaces.",
                     },
                     "type": {
                         "type": "string",
@@ -134,12 +134,13 @@ class ConfluenceSearchPagesTool(BaseAgentTool):
 
     def _normalize_space_key(self, space_key):
         if isinstance(space_key, str):
-            stripped = space_key.strip()
-            return stripped or None
+            parts = [part.strip() for part in space_key.replace(";", ",").split(",")]
+            cleaned = [part for part in parts if part]
+            return ",".join(cleaned) or None
         if space_key is None:
             return None
-        text_value = str(space_key).strip()
-        return text_value or None
+        text_value = str(space_key)
+        return self._normalize_space_key(text_value)
 
     @staticmethod
     def _normalize_text(value):

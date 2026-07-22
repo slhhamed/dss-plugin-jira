@@ -210,6 +210,25 @@ def test_confluence_client_search_pages_applies_filters(monkeypatch):
     assert cql.endswith("ORDER BY created ASC")
 
 
+def test_confluence_client_search_pages_builds_or_clause_for_multiple_spaces(monkeypatch):
+    captured = {}
+
+    def fake_request(self, method, url, params=None, **kwargs):
+        captured["params"] = params
+        return DummyResponse(payload={"results": []})
+
+    monkeypatch.setattr(requests.Session, "request", fake_request)
+
+    client = ConfluenceClient({"api_url": "https://confluence.example.com/"})
+
+    client.search_pages("Dataiku", limit=3, space_key="AIEC; BNA")
+
+    assert (
+        captured["params"]["cql"]
+        == 'type = "page" AND (space = "AIEC" OR space = "BNA") AND text ~ "Dataiku" ORDER BY lastmodified DESC'
+    )
+
+
 def test_confluence_client_search_pages_handles_error(monkeypatch):
     def fake_request(self, method, url, params=None, **kwargs):
         payload = {"message": "cql query parameter is required"}

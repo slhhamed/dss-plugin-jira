@@ -27,7 +27,7 @@
             "name": "space_key",
             "label": "Confluence space key",
             "type": "STRING",
-            "description": "Optional key of the Confluence space to restrict the search. Leave empty to search all spaces.",
+            "description": "Optional Confluence space key(s) to restrict the search. Supports comma-separated keys (semicolon also accepted). Leave empty to search all spaces.",
             "optional": true
         },
         {
